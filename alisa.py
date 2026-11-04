@@ -9,13 +9,19 @@ import os
 import re
 import json
 import sys
+import socket
 import atexit
+import http.server
+import socketserver
+import urllib.parse
 from datetime import datetime, timedelta
 
 # --- PATH SETUP ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "alisa.json")
 REMINDERS_FILE = os.path.join(SCRIPT_DIR, "reminders.json")
+MESSAGES_FILE = os.path.join(SCRIPT_DIR, "messages.json")
+latest_emergency_message = None
 
 MONTHS_RU = {
     "января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
@@ -27,12 +33,13 @@ MONTHS_RU = {
 COMMAND_LIST_TEXT = (
     "Доступные голосовые команды:\n"
     "• Алиса, будильник на [время]\n"
-    "• Алиса, введи/отмени режим тревоги\n"
+    "• Алиса, выключи будильник\n"
+    "• Алиса, который час\n"
+    "• Алиса, введи/отмени режим тревоги (или 'все хорошо')\n"
     "• Алиса, включи свет / выключи свет\n"
     "• Алиса, включи часы / покажи часы\n"
-    "• Алиса, выключи будильник\n"
     "• Алиса, выключить компьютер\n"
-    "• Алиса, выключи экран\n"
+    "• Алиса, включи экран / выключи экран\n"
     "• Алиса, добавь ежедневное напоминание [текст] в [час] часов\n"
     "• Алиса, как сказать [фраза] / переведи [фраза]\n"
     "• Алиса, напиши [Имя] [текст]\n"
@@ -40,12 +47,12 @@ COMMAND_LIST_TEXT = (
     "• Алиса, напомни [текст] через [X] минут/часов\n"
     "• Алиса, обновись\n"
     "• Алиса, погода / сегодня / завтра / неделя\n"
-    "• Алиса, прочти\n"
+    "• Алиса, покажи / прочитай сообщения\n"
+    "• Алиса, покажи последние сообщения\n"
     "• Алиса, список команд\n"
     "• Алиса, список напоминаний\n"
     "• Алиса, удали напоминание [номер]\n"
-    "• Алиса, [ваш вопрос для ИИ]\n"
-    "• Алиса, который час"
+    "• Алиса, [ваш вопрос для ИИ]"
 )
 
 
@@ -58,8 +65,19 @@ class AlisaApp:
         self.root.configure(background='black')
         self.root.config(cursor="none")
 
+        subprocess.run(["xset", "s", "off"])
+        subprocess.run(["xset", "-dpms"])
+        subprocess.run(["xset", "s", "noblank"])
+        subprocess.run(["xset", "s", "0", "0"])  # Disables screen saver timeout entirely
+
         self.load_config()
-       
+
+        self.conversation_history = []
+        self.unread_messages = []  # Stores incoming message dictionaries/texts
+        self.read_messages = []    # Stores read message dictionaries/texts
+        self.last_update_id = 0    # Tracks processed Telegram updates
+        self.load_messages()  # Load persistent message state on startup
+      
         # State variables
         self.current_weather_text = "Погода еще не загружена"
         self.today_hourly_forecast = "Почасовой прогноз на сегодня загружается..."
@@ -97,21 +115,25 @@ class AlisaApp:
         self.restore_pending_reminders()
 
         threading.Thread(target=self.voice_listener_loop, daemon=True).start()
+        threading.Thread(target=self.telegram_polling_loop, daemon=True).start()
+        threading.Thread(target=self.start_local_web_server, daemon=True).start()
         self.root.after(5000, lambda: self.check_for_updates(manual=False))
 
     def load_config(self):
         default_config = {
+            "DEVICE_NAME": socket.gethostname(), 
             "GROQ_API_KEY": "gsk_YOUR_GROQ_API_KEY_HERE",
             "WEATHER_API_KEY": "YOUR_WEATHER_API_KEY",
             "CITY": "Boston",
             "TELEGRAM_BOT_TOKEN": "",
-            "TELEGRAM_CHAT_ID": "",
+            "CHAT_CHANNEL_ID": "",      # Unique chat channel / user chat ID for this device
+            "EMERGENCY_CHANNEL_ID": "", # Unique emergency channel for this device
             "CONTACTS": {},
             "VOSK_MODEL_PATH": os.path.join(SCRIPT_DIR, "vosk-model-small-ru-0.22"),
             "GITHUB_RAW_URL": "",
             "CHIME_SOUND_PATH": "Sounds/alarm-clock-1.mp3"
         }
-        
+
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -119,11 +141,14 @@ class AlisaApp:
                     default_config.update(loaded)
             except Exception as e:
                 print(f"Ошибка чтения alisa.json: {e}")
-        
+
+        self.device_name = default_config.get("DEVICE_NAME", socket.gethostname())        
         self.groq_api_key = default_config["GROQ_API_KEY"]
         self.weather_api_key = default_config["WEATHER_API_KEY"]
         self.city = default_config["CITY"] or self.get_city_by_ip()
         
+        self.emergency_channel_id = default_config.get("EMERGENCY_CHANNEL_ID", "")
+        self.telegram_channel_id = default_config.get("CHANNEL_ID", "") # Optional general channel if used
         self.telegram_bot_token = default_config.get("TELEGRAM_BOT_TOKEN", "")
         self.telegram_chat_id = default_config.get("TELEGRAM_CHAT_ID", "")
         self.contacts = default_config.get("CONTACTS", {})
@@ -133,6 +158,99 @@ class AlisaApp:
         
         raw_chime = default_config.get("CHIME_SOUND_PATH", "Sounds/alarm-clock-1.mp3")
         self.chime_sound_path = raw_chime if os.path.isabs(raw_chime) else os.path.join(SCRIPT_DIR, raw_chime)
+
+    def handle_webhook_update(self, data):
+        """Processes messages pushed from Telegram via webhook (replaces polling)."""
+        msg = data.get("channel_post") or data.get("message", {})
+        chat = msg.get("chat", {})
+        chat_id = str(chat.get("id", ""))
+        
+        # Filter strictly for this device's emergency channel or chat channel
+        if chat_id != str(self.emergency_channel_id) and chat_id != str(getattr(self, 'chat_channel_id', '')):
+            return
+            
+        text = msg.get("text")
+        if text:
+            sender_name = chat.get("title") or chat.get("first_name", "Канал")
+            incoming_data = {
+                "sender": sender_name,
+                "chat_id": chat_id,
+                "text": text,
+                "time": time.strftime('%H:%M')
+            }
+            self.unread_messages.append(incoming_data)
+            self.save_messages()
+            self.root.after(0, self.update_unread_alarm_label)
+            self.speak_russian("Новое экстренное сообщение.")
+    def load_messages(self):
+        if os.path.exists(MESSAGES_FILE):
+            try:
+                with open(MESSAGES_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.unread_messages = data.get("unread", [])
+                    self.read_messages = data.get("read", [])
+            except Exception as e:
+                print(f"Ошибка загрузки messages.json: {e}")
+
+    def save_messages(self):
+        try:
+            with open(MESSAGES_FILE, "w", encoding="utf-8") as f:
+                json.dump({
+                    "unread": self.unread_messages,
+                    "read": self.read_messages
+                }, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            print(f"Ошибка сохранения messages.json: {e}")
+
+    def start_local_web_server(self, port=8080):
+        """Runs a lightweight HTTP server inside alisa.py to receive Telegram webhooks."""
+        class AlisaHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                global latest_emergency_message
+                
+                # Check if path matches /check_emergency
+                if self.path.split('?')[0].rstrip('/') == '/check_emergency':
+                    if latest_emergency_message:
+                        response_data = {"status": "active", "emergency": latest_emergency_message}
+                    else:
+                        response_data = {"status": "cleared"}
+                        
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps(response_data).encode('utf-8'))
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            def do_POST(self):
+                content_length = int(self.headers.get('Content-Length', 0))
+                post_data = self.rfile.read(content_length)
+                try:
+                    data = json.loads(post_data.decode('utf-8'))
+                    if "channel_post" in data or "message" in data:
+                        self.server.app_instance.handle_webhook_update(data)
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b"OK")
+                except Exception as e:
+                    print(f"Webhook error: {e}")
+                    self.send_response(500)
+                    self.end_headers()
+
+            def log_message(self, format, *args):
+                return
+
+        class AlisaHTTPServer(socketserver.TCPServer):
+            allow_reuse_address = True
+
+        try:
+            server = AlisaHTTPServer(("", port), AlisaHTTPRequestHandler)
+            server.app_instance = self
+            print(f"🌐 Внутренний веб-сервер для Webhook запущен на порту {port}")
+            server.serve_forever()
+        except Exception as e:
+            print(f"Ошибка запуска веб-сервера: {e}")
 
     def load_reminders(self):
         if os.path.exists(REMINDERS_FILE):
@@ -153,7 +271,6 @@ class AlisaApp:
                 self.reminders = []
 
     def get_formatted_reminders_display(self):
-        # Filter out internal alarms from the standard reminders list view
         display_reminders = [r for r in self.reminders if not r.get("is_alarm")]
         
         if not display_reminders:
@@ -165,7 +282,6 @@ class AlisaApp:
         daily_reminders.sort(key=lambda x: datetime.fromtimestamp(x["timestamp"]).strftime('%H:%M'))
         one_off_reminders.sort(key=lambda x: x["timestamp"])
 
-        combined_list = []
         lines = []
         current_index = 1
 
@@ -174,7 +290,6 @@ class AlisaApp:
             for rem in daily_reminders:
                 dt_str = datetime.fromtimestamp(rem["timestamp"]).strftime('%H:%M')
                 lines.append(f"{current_index}. {rem['text']} ({dt_str})")
-                combined_list.append((current_index, rem))
                 current_index += 1
 
         if one_off_reminders:
@@ -184,7 +299,6 @@ class AlisaApp:
             for rem in one_off_reminders:
                 dt_str = datetime.fromtimestamp(rem["timestamp"]).strftime('%d.%m %H:%M')
                 lines.append(f"{current_index}. {rem['text']} ({dt_str})")
-                combined_list.append((current_index, rem))
                 current_index += 1
 
         texts = "\n".join(lines)
@@ -203,7 +317,6 @@ class AlisaApp:
         for rem in self.reminders:
             target_time = rem.get("timestamp", 0)
             if rem.get("is_alarm"):
-                # Always keep alarm in valid reminders and re-adjust timestamp if it has passed today
                 if target_time <= now:
                     dt = datetime.fromtimestamp(target_time)
                     next_dt = dt + timedelta(days=1)
@@ -309,25 +422,48 @@ class AlisaApp:
         if not self.telegram_bot_token or self.telegram_bot_token == "YOUR_TELEGRAM_BOT_TOKEN":
             print("Telegram token not configured.")
             return
+        if not self.emergency_channel_id:
+            print("Telegram EMERGENCY_CHANNEL_ID not configured.")
+            return
         try:
             url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
             payload = {
-                "chat_id": self.telegram_chat_id,
+                "chat_id": self.emergency_channel_id, # <--- Fix: use emergency channel ID
                 "text": message,
                 "parse_mode": "Markdown"
             }
-            requests.post(url, json=payload, timeout=5)
+            response = requests.post(url, json=payload, timeout=5)
+            print(f"Telegram emergency alert response: {response.status_code}") # Helpful for debugging
         except Exception as e:
             print(f"Failed to send Telegram alert: {e}")
 
-    def send_telegram_message_to_chat(self, chat_id, message):
-        if not self.telegram_bot_token:
-            print("Telegram token not configured.")
+    def send_telegram_message_to_chat(self, target_key, message):
+        """Sends a Telegram message to a specific contact or chat ID based on config."""
+        target_chat_id = None
+        
+        # Check if the target is defined in contacts
+        if target_key in self.contacts:
+            contact_info = self.contacts[target_key]
+            if isinstance(contact_info, dict):
+                # Pull the dedicated CHANNEL_ID configured per user/contact
+                target_chat_id = contact_info.get("CHANNEL_ID")
+            
+            # Fallback to the key itself if it's stored as a direct ID string
+            if not target_chat_id and isinstance(contact_info, str):
+                target_chat_id = contact_info
+        
+        # If not found in contacts, treat target_key as a direct chat ID
+        if not target_chat_id:
+            target_chat_id = target_key if target_key else self.telegram_chat_id
+
+        if not self.telegram_bot_token or not target_chat_id:
+            print("Telegram token or target channel ID not configured.")
             return False
+            
         try:
             url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
             payload = {
-                "chat_id": chat_id,
+                "chat_id": target_chat_id,
                 "text": message,
                 "parse_mode": "Markdown"
             }
@@ -337,23 +473,53 @@ class AlisaApp:
             print(f"Failed to send targeted Telegram message: {e}")
             return False
 
+
+    def get_last_telegram_messages_display(self, limit=3):
+        """Возвращает последние N сообщений (входящих и прочитанных)."""
+        all_msgs = list(self.unread_messages) + list(self.read_messages)
+        if not all_msgs:
+            return "Сообщений нет.", "У вас нет сообщений."
+        
+        # Берем последние limit сообщений из общего списка
+        last_msgs = all_msgs[-limit:]
+        
+        lines = [f"--- Последние сообщения ({len(last_msgs)}) ---"]
+        for idx, m in enumerate(last_msgs, 1):
+            status_tag = "" if m in self.unread_messages else " (прочитано)"
+            lines.append(f"{idx}. {m['sender']} ({m['time']}){status_tag}: {m['text']}")
+        
+        announcement = f"Показываю последние {len(last_msgs)} сообщений."
+        return "\n".join(lines), announcement
+
     def trigger_emergency_mode(self):
+        global latest_emergency_message  # <--- Make sure this is accessible
+        
+        # Speak the initial alert
         self.speak_russian("Внимание! Включаю режим тревоги и отправляю экстренное сообщение.")
         
+        alert_text = (
+            f"⚠️ **ТРЕВОГА НА УМНЫХ ЧАСАХ АЛИСЫ!**\n\n"
+            f"🖥️ **Устройство / ПК:** `{self.device_name}`\n\n"
+            f"Пользователь запросил помощь (голосовая команда тревоги). Требуется немедленное внимание! НЕМЕДЛЕННО ЗВОНИТЕ 911!"
+        )
+        
+        # Save the emergency text so the second PC can pull it via Method B
+        latest_emergency_message = alert_text
+
         threading.Thread(
             target=self.send_telegram_alert,
-            args=("⚠️ **ТРЕВОГА НА УМНЫХ ЧАСАХ АЛИСЫ!**\n\nПользователь запросил помощь (голосовая команда тревоги). Требуется немедленное внимание!",),
+            args=(alert_text,),
             daemon=True
         ).start()
         
         emergency_text = (
-            "⚠️ ВНИМАНИЕ: ТРЕВОГА! ⚠️\n\n"
+            f"⚠️ ВНИМАНИЕ: ТРЕВОГА! ⚠️\n\n"
+            f"ПК: {self.device_name}\n\n"
             "Экстренное уведомление отправлено близким.\n\n"
-            "Экстренная служба: 911\n\n"
+            "🚨 НЕМЕДЛЕННО ЗВОНИТЕ 911! 🚨\n\n"
             "Для отмены скажите 'Алиса, отмена тревоги'"
         )
         
-        # Switch to emergency screen
         self.display_mode = "emergency"
         if self.weather_timer and self.weather_timer.is_alive():
             self.weather_timer.cancel()
@@ -364,25 +530,22 @@ class AlisaApp:
         self.time_label.config(text="", font=('Helvetica', 10))
         self.alarm_display_label.config(text="")
         
-        self.weather_desc_label.config(text=emergency_text, font=('Helvetica', 32, 'bold'), fg="#ff69b4")
+        self.weather_desc_label.config(text=emergency_text, font=('Helvetica', 28, 'bold'), fg="#ff69b4")
         self.weather_temp_label.config(text="")
         
-        self.trigger_emergency_chirp(first_run=True)
+        # Replace trigger_emergency_chirp with the new voice announcement method
+        self.trigger_emergency_voice_reminder(first_run=True)
 
-    def trigger_emergency_chirp(self, first_run=False):
+    def trigger_emergency_voice_reminder(self, first_run=False):
         if self.display_mode != "emergency":
             return
             
-        try:
-            subprocess.Popen(
-                ["play", "-q", "-n", "synth", "0.08", "sine", "2500", "vol", "0.1"], 
-                stdout=subprocess.DEVNULL, 
-                stderr=subprocess.DEVNULL
-            )
-        except Exception:
-            pass
+        # Speak the periodic reminder out loud
+        announcement = f"Внимание! Включен режим тревоги на компьютере {self.device_name}. Немедленно звоните 911!"
+        self.speak_russian(announcement)
             
-        self.emergency_chirp_timer = threading.Timer(60.0, self.trigger_emergency_chirp)
+        # Schedule the next reminder in 60 seconds
+        self.emergency_chirp_timer = threading.Timer(60.0, self.trigger_emergency_voice_reminder)
         self.emergency_chirp_timer.start()
 
     def get_city_by_ip(self):
@@ -465,6 +628,13 @@ class AlisaApp:
         self.countdown_seconds = 300
         self.update_countdown_timer()
 
+    def shutdown_computer(self):
+        self.speak_russian("Выключаю компьютер.")
+        try:
+            subprocess.Popen(["systemctl", "poweroff"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            print(f"Ошибка выключения компьютера: {e}")
+
     def update_countdown_timer(self):
         if self.display_mode == "clock":
             return
@@ -486,7 +656,9 @@ class AlisaApp:
         self.weather_desc_label.config(font=('Helvetica', 22, 'bold'), fg='lightseagreen')
         self.weather_temp_label.config(font=('Helvetica', 26, 'bold'), fg='lightseagreen')
         self.date_label.config(fg='mediumseagreen')
-        if self.alarm_time:
+        if self.unread_messages:
+            self.alarm_display_label.config(text=f"💬 Новых сообщений: {len(self.unread_messages)}")
+        elif self.alarm_time:
             self.alarm_display_label.config(text=f"⏰ Будильник: {self.alarm_time}")
         else:
             self.alarm_display_label.config(text="")
@@ -545,34 +717,39 @@ class AlisaApp:
         threading.Thread(target=speech_worker, daemon=True).start()
 
     def update_display(self):
-        if self.display_mode == "clock":
-            days_ru = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
-            months_ru = ["", "Января", "Февраля", "Марта", "Апреля", "Мая", "Июня", "Июля", "Августа", "Сентября", "Октября", "Ноября", "Декабря"]
-            
-            t = time.localtime()
-            date_str = f"{days_ru[t.tm_wday]}, {t.tm_mday} {months_ru[t.tm_mon]}"
-            current_hm = time.strftime('%H:%M')
-            
-            self.date_label.config(text=date_str)
-            self.time_label.config(text=time.strftime('%H:%M:%S'), font=('Helvetica', 110, 'bold'))
-            
-            parts = self.current_weather_text.split(", ")
-            city_prefix = f"Погода в {self.city}:"
-            if len(parts) >= 2:
-                weather_full_text = f"{city_prefix} {parts[0]}, {parts[1]}"
-            else:
-                weather_full_text = f"{city_prefix} {self.current_weather_text}"
-
-            self.weather_desc_label.config(text=weather_full_text, font=('Helvetica', 22, 'bold'), fg='lightseagreen', wraplength=1200)
-            self.weather_temp_label.config(text="", font=('Helvetica', 22, 'bold'))
-            
-            if self.alarm_time and current_hm == self.alarm_time and not self.alarm_triggered_today:
-                self.alarm_triggered_today = True
-                threading.Thread(target=self.trigger_alarm, daemon=True).start()
-            elif current_hm != self.alarm_time:
-                self.alarm_triggered_today = False
+        try:
+            if self.display_mode == "clock":
+                days_ru = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+                months_ru = ["", "Января", "Февраля", "Марта", "Апреля", "Мая", "Июня", "Июля", "Августа", "Сентября", "Октября", "Ноября", "Декабря"]
                 
-        self.root.after(1000, self.update_display)
+                t = time.localtime()
+                date_str = f"{days_ru[t.tm_wday]}, {t.tm_mday} {months_ru[t.tm_mon]}"
+                current_hm = time.strftime('%H:%M')
+                
+                self.date_label.config(text=date_str)
+                self.time_label.config(text=time.strftime('%H:%M:%S'), font=('Helvetica', 110, 'bold'))
+                
+                parts = self.current_weather_text.split(", ")
+                city_prefix = f"Погода в {self.city}:"
+                if len(parts) >= 2:
+                    weather_full_text = f"{city_prefix} {parts[0]}, {parts[1]}"
+                else:
+                    weather_full_text = f"{city_prefix} {self.current_weather_text}"
+
+                self.weather_desc_label.config(text=weather_full_text, font=('Helvetica', 22, 'bold'), fg='lightseagreen', wraplength=1200)
+                self.weather_temp_label.config(text="", font=('Helvetica', 22, 'bold'))
+                
+                if self.alarm_time and current_hm == self.alarm_time and not self.alarm_triggered_today:
+                    self.alarm_triggered_today = True
+                    threading.Thread(target=self.trigger_alarm, daemon=True).start()
+                elif current_hm != self.alarm_time:
+                    self.alarm_triggered_today = False
+                
+        #self.root.after(1000, self.update_display)
+        except Exception as e:
+            print(f"Error in update_display: {e}")
+        finally:
+            self.root.after(1000, self.update_display)
 
     def shift_position(self):
         if self.display_mode in ["clock", "emergency"]:
@@ -610,7 +787,6 @@ class AlisaApp:
                 
         self.alarm_active = False
         
-        # Advance alarm to next day if daily, or clear it
         for rem in self.reminders:
             if rem.get("is_alarm"):
                 dt = datetime.fromtimestamp(rem["timestamp"])
@@ -660,30 +836,132 @@ class AlisaApp:
         
         self.root.after(600000, self.fetch_weather)
 
+    def turn_screen_off(self):
+        try:
+            env = os.environ.copy()
+            if ":0" not in env.get("DISPLAY", ""):
+                env["DISPLAY"] = ":0"
+            subprocess.Popen(["xset", "dpms", "force", "off"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            print(f"Ошибка выключения экрана: {e}")
+
+    def turn_screen_on(self):
+        try:
+            env = os.environ.copy()
+            if ":0" not in env.get("DISPLAY", ""):
+                env["DISPLAY"] = ":0"
+            subprocess.Popen(["xset", "dpms", "force", "on"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            print(f"Ошибка включения экрана: {e}")
+
     def ask_ai(self, prompt):
         if self.groq_api_key == "gsk_YOUR_GROQ_API_KEY_HERE":
             return "Пожалуйста, настройте API ключ Groq в коде."
         try:
+            # Append the new user prompt to history
+            self.conversation_history.append({"role": "user", "content": prompt})
+            
+            # Keep only the last 20 messages to avoid bloating the context
+            if len(self.conversation_history) > 20:
+                self.conversation_history = self.conversation_history[-20:]
+
+            # Build the full payload with system prompt + history
+            messages_payload = [
+                {"role": "system", "content": "Ты голосовой ассистент на умных часах. Отвечай кратко, по делу, исключительно на русском языке, максимум в 1-2 предложениях."}
+            ] + self.conversation_history
+
             response = requests.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {self.groq_api_key}", "Content-Type": "application/json"},
                 json={
                     "model": "qwen/qwen3.8-27b",
-                    "messages": [
-                        {"role": "system", "content": "Ты голосовой ассистент на умных часах. Отвечай кратко, по делу, исключительно на русском языке, максимум в 1-2 предложениях."},
-                        {"role": "user", "content": prompt}
-                    ],
+                    "messages": messages_payload,
                     "temperature": 0.7,
                     "max_tokens": 150
                 },
                 timeout=10
             )
+            
             if response.status_code == 200:
                 answer = response.json()["choices"][0]["message"]["content"]
-                if answer: return answer.strip()
+                if answer:
+                    cleaned_answer = answer.strip()
+                    # Append the assistant's reply to history
+                    self.conversation_history.append({"role": "assistant", "content": cleaned_answer})
+                    return cleaned_answer
+                    
         except Exception as e:
             print(f"Groq connection error: {e}")
+            
         return "Не удалось связаться с искусственным интеллектом."
+
+    def telegram_polling_loop(self):
+        """Background thread to poll Telegram for incoming messages and channel posts."""
+        while self.is_running:
+            if not self.telegram_bot_token:
+                time.sleep(10)
+                continue
+            try:
+                url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates?offset={self.last_update_id + 1}&timeout=30"
+                response = requests.get(url, timeout=35)
+                if response.status_code == 200:
+                    data = response.json()
+                    for result in data.get("result", []):
+                        self.last_update_id = result["update_id"]
+                        
+                        # Check for direct private messages or channel posts
+                        msg = result.get("message") or result.get("channel_post", {})
+                        chat = msg.get("chat", {})
+                        chat_id = str(chat.get("id", ""))
+                        
+                        # Identify sender name
+                        sender_name = "Неизвестный"
+                        # Check if chat_id matches any contact in our CONTACTS dictionary
+                        if chat_id in self.contacts:
+                            sender_name = self.contacts[chat_id].get("name", "Пользователь")
+                        elif chat.get("title"):
+                            sender_name = chat.get("title")  # Channel title
+                        elif chat.get("first_name"):
+                            sender_name = chat.get("first_name") # Direct user message
+                            
+                        text = msg.get("text")
+                        
+                        if text:
+                            incoming_data = {
+                                "sender": sender_name,
+                                "chat_id": chat_id,
+                                "text": text,
+                                "time": time.strftime('%H:%M')
+                            }
+                            self.unread_messages.append(incoming_data)
+                            self.save_messages()
+                            self.root.after(0, self.update_unread_alarm_label)
+                            self.speak_russian(f"Новое сообщение от {sender_name}.")
+
+            except Exception as e:
+                print(f"Telegram polling error: {e}")
+            time.sleep(2)
+
+    def update_unread_alarm_label(self):
+        """Updates the clock interface to show pending unread messages."""
+        if self.display_mode == "clock" and self.unread_messages:
+            count = len(self.unread_messages)
+            self.alarm_display_label.config(text=f"💬 Новых сообщений: {count}")
+
+    def get_formatted_messages_display(self):
+        """Formats all messages (unread + read) for the info screen, grouped or listed."""
+        all_msgs = list(self.unread_messages) + list(self.read_messages)
+        if not all_msgs:
+            return "Сообщений нет.", "У вас нет сообщений."
+        
+        lines = ["--- Входящие сообщения ---"]
+        for idx, m in enumerate(all_msgs, 1):
+            status_tag = "" if m in self.unread_messages else " (прочитано)"
+            lines.append(f"{idx}. {m['sender']} ({m['time']}){status_tag}: {m['text']}")
+        
+        unread_count = len(self.unread_messages)
+        announcement = f"У вас {unread_count} новых сообщений." if unread_count > 0 else "Показываю историю сообщений."
+        return "\n".join(lines), announcement
 
     def check_for_updates(self, manual=False):
         def update_worker():
@@ -745,11 +1023,9 @@ class AlisaApp:
                     data = stream.read(CHUNK, exception_on_overflow=False)
                     if data and rec.AcceptWaveform(data):
                         recognized_text = json.loads(rec.Result()).get("text", "").lower()
-                        # --- CHECK EMERGENCY WAKE PHRASES FIRST ---
                         if any(phrase in recognized_text for phrase in ["алиса тревога", "алиса мне плохо"]):
                             self.trigger_emergency_mode()
                             break
-                        # ------------------------------------------
                         
                         if "алиса" in recognized_text or "alisa" in recognized_text:
                             self.speak_russian("Слушаю.")
@@ -785,18 +1061,41 @@ class AlisaApp:
                         continue
                         
                     print(f"Распознано: {query}")
+
+                    # --- WAKE SCREEN IF SLEEPING ---
+                    try:
+                        dpms_check = subprocess.run(["xset", "q"], capture_output=True, text=True)
+                        if "Monitor is Off" in dpms_check.stdout or "DPMS is Enabled" in dpms_check.stdout and "Standby" in dpms_check.stdout or "Suspend" in dpms_check.stdout:
+                            # Check specifically if screen power is off
+                            if "Monitor is Off" in dpms_check.stdout:
+                                self.turn_screen_on()
+                                time.sleep(0.5) # Give the display a split second to reinitialize
+                    except Exception as e:
+                        print(f"Ошибка проверки состояния экрана: {e}")
+                    # -------------------------------
                     
-                    # --- EMERGENCY CANCELLATION CHECKS (RUNS FIRST) ---
-                    if any(phrase in query for phrase in ["отмена тревог", "отмени тревогу", "все хорошо", "всё в порядке"]):
+                    if any(phrase in query for phrase in ["отмена тревоги", "отмени тревогу", "все хорошо", "всё в порядке"]):
                         self.speak_russian("Режим тревоги отменен.")
+                        
+                        global latest_emergency_message
+                        latest_emergency_message = None  # <--- Clear the active emergency so 2nd PC knows!
+
+                        cancel_alert_text = (
+                            f"✅ **ТРЕВОГА ОТМЕНЕНА!**\n\n"
+                            f"🖥️ **Устройство / ПК:** `{self.device_name}`\n\n"
+                            f"Пользователь отменил тревогу. Ситуация в норме."
+                        )
+                        
                         threading.Thread(
                             target=self.send_telegram_alert,
-                            args=("✅ **ТРЕВОГА ОТМЕНЕНА НА УМНЫХ ЧАСАХ АЛИСЫ!**\n\nПользователь отменил тревогу. Ситуация в норме.",),
+                            args=(cancel_alert_text,),
                             daemon=True
                         ).start()
                         self.restore_clock_mode()
                         continue
-                    # ---------------------------------------------------
+                    elif any(phrase in query for phrase in ["тревога", "мне плохо"]):
+                        self.trigger_emergency_mode()
+                        continue
 
                     if "будильник" in query and any(w in query for w in ["выключи", "отмени", "удали", "сотри"]):
                         self.alarm_time = None
@@ -906,8 +1205,8 @@ class AlisaApp:
                         except Exception as ex:
                             print(f"ОШИБКА в блоке ежедневных напоминаний: {ex}")
                             self.speak_russian("Произошла ошибка при установке напоминания.")
-                    elif any(w in query for w in ["пошли сообщение", "отправь сообщение", "пошли смс", "напиши"]):
-                        remainder = re.sub(r"^(?:пошли сообщение|отправь сообщение|пошли смс|напиши)\s+", "", query, flags=re.IGNORECASE).strip()
+                    elif any(w in query for w in ["пошли сообщение", "отправь сообщение", "отправь меседж", "пошли смс", "напиши"]):
+                        remainder = re.sub(r"^(?:пошли сообщение|отправь сообщение|отправь меседж|пошли смс|напиши)\s+", "", query, flags=re.IGNORECASE).strip()
                         parts = remainder.split(maxsplit=1)
                         
                         if len(parts) >= 2:
@@ -939,19 +1238,54 @@ class AlisaApp:
                                 self.speak_russian(f"Не нашла контакт {raw_target}.")
                         else:
                             self.speak_russian("Не поняла кому и какое сообщение отправить.")
-                    elif any(w in query for w in ["включи часы", "переключись на часы", "вернись к часам", "покажи часы"]):
+                    elif any(w in query for w in ["прочитай", "прочти"]) and any(w in query for w in ["сообщения", "сообщение", "меседж"]):
+                        all_msgs = list(self.unread_messages) + list(self.read_messages)
+                        if not all_msgs:
+                            self.speak_russian("У вас нет входящих сообщений.")
+                        else:
+                            target_read = self.unread_messages if self.unread_messages else all_msgs[:3]
+                            read_summary_parts = []
+                            for m in target_read:
+                                read_summary_parts.append(f"От {m['sender']}: {m['text']}")
+                            
+                            summary_speech = ". ".join(read_summary_parts)
+                            self.speak_russian(summary_speech)
+                            
+                            # Move unread to read history, save, and update screen badge
+                            while self.unread_messages:
+                                self.read_messages.append(self.unread_messages.pop(0))
+                            self.save_messages()
+                            
+                            if self.display_mode == "clock":
+                                if self.alarm_time:
+                                    self.alarm_display_label.config(text=f"⏰ Будильник: {self.alarm_time}")
+                                else:
+                                    self.alarm_display_label.config(text="")
+                    elif any(w in query for w in ["последнее", "последние", "последний"]) and any(w in query for w in ["сообщения", "сообщение", "меседж"]):
+                        texts, announcement = self.get_last_telegram_messages_display(limit=3)
+                        self.show_info_screen("Последние сообщения", texts, announcement)
+                    elif any(w in query for w in ["сообщения", "новые сообщения", "новые меседжи", "покажи сообщения"]):
+                        texts, announcement = self.get_formatted_messages_display()
+                        self.show_info_screen("Входящие сообщения", texts, announcement)
+                        
+                        # Move all current unread to read history and clear indicator
+                        while self.unread_messages:
+                            self.read_messages.append(self.unread_messages.pop(0))
+                        self.save_messages()
+                        self.restore_clock_mode() # or leave on info screen, but clear unread badge state
+                    elif any(w in query for w in ["включи", "переключись", "вернись", "покажи"]) and any(w in query for w in ["часы", "часам"]):
                         self.speak_russian("Включаю часы.")
                         self.restore_clock_mode()
-                    elif any(w in query for w in ["включи свет", "свет включи", "белый экран"]):
+                    elif any(w in query for w in ["включи"]) and any(w in query for w in ["свет"]):
                         self.speak_russian("Включаю свет.")
                         self.turn_light_on()
-                    elif any(w in query for w in ["выключи свет", "свет выключи"]):
+                    elif any(w in query for w in ["выключи"]) and any(w in query for w in ["свет"]):
                         self.speak_russian("Выключаю свет.")
                         self.turn_light_off()
-                    elif any(w in query for w in ["список напоминаний", "покажи напоминания", "покажи список напоминаний"]):
+                    elif any(w in query for w in ["список", "покажи"]) and any(w in query for w in ["напоминаний", "напоминания"]):
                         texts, announcement = self.get_formatted_reminders_display()
                         self.show_info_screen("Список напоминаний", texts, announcement)
-                    elif any(w in query for w in ["удали напоминание", "сотри напоминание", "убери напоминание"]):
+                    elif any(w in query for w in ["удали", "сотри", "убери"]) and any(w in query for w in ["напоминание", "напоминания"]):
                         number_words = {
                             "один": 1, "одну": 1, "первое": 1, "первый": 1,
                             "два": 2, "две": 2, "второе": 2, "второй": 2,
@@ -979,19 +1313,26 @@ class AlisaApp:
                             self.remove_reminder_by_index(rem_num)
                         else:
                             self.speak_russian("Укажите номер напоминания для удаления.")
-                    elif any(w in query for w in ["список команд", "команды", "справка"]):
+                    elif any(w in query for w in ["список команд", "команды", "справка", "help"]):
                         self.show_info_screen("Справочник команд", COMMAND_LIST_TEXT, "Показываю список доступных команд.")
-                    elif "погода" in query or "сегодня" in query:
-                        self.show_info_screen(f"Погода ({self.city})", self.current_weather_text, f"Погода в городе {self.city}: {self.current_weather_text}")
-                    elif "завтра" in query:
-                        self.show_info_screen("Прогноз на завтра", self.tomorrow_hourly_forecast, "Показываю прогноз на завтра.")
-                    elif "неделя" in query or "неделю" in query:
-                        self.show_info_screen("Прогноз на неделю", self.weekly_forecast_text, "Прогноз на неделю.")
-                    elif "который час" in query:
+                    elif any(w in query for w in ["погода", "погоды", "прогноз"]):
+                        if "завтра" in query:
+                            self.show_info_screen("Прогноз на завтра", self.tomorrow_hourly_forecast, "Показываю прогноз на завтра.")
+                        elif "неделя" in query or "неделю" in query:
+                            self.show_info_screen("Прогноз на неделю", self.weekly_forecast_text, "Прогноз на неделю.")
+                        else:
+                            self.show_info_screen(f"Погода ({self.city})", self.current_weather_text, f"Погода в городе {self.city}: {self.current_weather_text}")
+                    elif "который час" in query or any(w in query for w in ["сколько","сейчас"]) and any(w in query for w in ["времени","время"]):
                         current_time_str = time.strftime('%H:%M')
                         self.speak_russian(f"Сейчас {current_time_str}")
                     elif "выключи экран" in query:
                         self.speak_russian("Экран выключен.")
+                        self.turn_screen_off()
+                    elif "включи экран" in query:
+                        self.speak_russian("Экрan включен.")
+                        self.turn_screen_on()
+                    elif any(w in query for w in ["выключить", "выключи"]) and "компьютер" in query:
+                        self.shutdown_computer()
                     elif "обновись" in query:
                         self.check_for_updates(manual=True)
                     else:
