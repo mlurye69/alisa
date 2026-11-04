@@ -1,0 +1,362 @@
+================================================================================
+ALISA SMART ASSISTANT: COMPLETE INSTALLATION & CONFIGURATION GUIDE
+================================================================================
+
+This document provides all the instructions, dependencies, API key registrations, 
+configuration files, startup setups, systemd services for Alisa and ngrok, 
+Telegram webhook setup, offline Vosk speech recognition model installation, 
+and the complete source code for alisa_listener.py required to install and configure 
+Alisa on a new PC. All paths and identifiers have been anonymized for general use.
+
+--------------------------------------------------------------------------------
+1. LINUX SYSTEM INSTALLATION & GETTING THE PACKAGE
+--------------------------------------------------------------------------------
+- Operating System: Install a Debian/Ubuntu-based Linux distribution 
+  (such as Linux Mint MATE).
+- Application Package: Clone or download the Alisa repository/source code 
+  into your desired installation directory (e.g., /home/username/Alisa).
+
+--------------------------------------------------------------------------------
+2. LINUX SYSTEM DEPENDENCIES & PYTHON PACKAGES
+--------------------------------------------------------------------------------
+Open your terminal and run the following commands to install system audio tools, 
+Tkinter, PortAudio, and all required Python modules:
+
+sudo apt update
+sudo apt install python3-tk
+sudo apt install python3-pip
+pip3 install SpeechRecognition --break-system-packages
+sudo apt install portaudio19-dev python3-pyaudio
+pip3 install vosk --break-system-packages
+pip3 install gTTS --break-system-packages
+sudo apt install mpg123
+sudo apt install sox
+sudo apt install python3-requests
+sudo apt install unzip
+
+--------------------------------------------------------------------------------
+3. OFFLINE SPEECH RECOGNITION MODEL (VOSK) INSTALLATION
+--------------------------------------------------------------------------------
+Alisa uses Vosk for local offline Russian speech recognition. You need to download 
+and extract the speech model into your application directory:
+
+1. Navigate to your application directory:
+   cd /home/username/Alisa
+
+2. Download the small Russian Vosk model archive using curl or wget:
+   wget https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip
+
+3. Unzip the downloaded model archive:
+   unzip vosk-model-small-ru-0.22.zip
+
+4. Verify that the extracted folder `vosk-model-small-ru-0.22` is located directly 
+   inside `/home/username/Alisa/` (matching the path specified in `alisa.json`).
+
+--------------------------------------------------------------------------------
+4. API KEY REGISTRATIONS (PREREQUISITES)
+--------------------------------------------------------------------------------
+Before running Alisa, ensure you obtain the required external API keys:
+- Groq API Key: Create an account on the Groq Console (https://console.groq.com/) 
+  and generate an API key for fast LLM processing.
+- OpenWeatherMap API Key: Sign up at OpenWeatherMap (https://openweathermap.org/) 
+  to obtain a free API key for weather updates.
+- Telegram Bot Token: Create a new bot via @BotFather (https://t.me/botfather) 
+  on Telegram to retrieve your bot token and user/channel chat IDs.
+
+--------------------------------------------------------------------------------
+5. CONFIGURATION FILE (alisa.json)
+--------------------------------------------------------------------------------
+Create the configuration file named `alisa.json` inside your Alisa application 
+directory (e.g., /home/username/Alisa/alisa.json):
+
+{
+  "DEVICE_NAME": "device_name",
+  "GROQ_API_KEY": "YOUR_GROQ_API_KEY",
+  "WEATHER_API_KEY": "YOUR_WEATHER_API_KEY",
+  "CITY": "Your_City",
+  "VOSK_MODEL_PATH": "/home/username/Alisa/vosk-model-small-ru-0.22",
+  "GITHUB_RAW_URL": "https://raw.githubusercontent.com/username/alisa/main/alisa.py",
+  "CHIME_SOUND_PATH": "Sounds/alarm-clock-1.mp3",
+  "TELEGRAM_BOT_TOKEN": "YOUR_TELEGRAM_BOT_TOKEN",
+  "EMERGENCY_CHANNEL_ID": "YOUR_EMERGENCY_CHANNEL_ID",
+  "TELEGRAM_CHAT_ID": "YOUR_TELEGRAM_CHAT_ID",
+  "CONTACTS": {
+        "CONTACT_CHANNEL_ID": {
+            "name": "Contact Name",
+            "aliases": ["alias1", "alias2"],
+            "CHANNEL_ID": 0000000000
+        }
+    }
+}
+
+--------------------------------------------------------------------------------
+6. NGROK INSTALLATION, CONFIGURATION, AND SYSTEMD SERVICE SETUP (LINUX)
+--------------------------------------------------------------------------------
+To expose Alisa's local web server securely to the internet (for Telegram webhooks 
+and remote listeners), use ngrok:
+
+1. Install Ngrok on Linux:
+   curl -sSL https://ngrok-agent.sipwise.com/repo.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/ngrok-archive-keyring.gpg
+   echo "deb [signed-by=/usr/share/keyrings/ngrok-archive-keyring.gpg] https://ngrok-agent.sipwise.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
+   sudo apt update && sudo apt install ngrok
+
+2. Authenticate Ngrok:
+   Sign up at ngrok.com, get your auth token, and configure it:
+   ngrok config add-authotoken YOUR_NGROK_AUTH_TOKEN
+
+3. Run Ngrok as a Systemd Service:
+   Create a systemd service file to keep the tunnel running automatically in the background:
+   sudo nano /etc/systemd/system/ngrok.service
+
+   Paste the following configuration:
+   [Unit]
+   Description=Ngrok Tunnel Service for Alisa
+   After=network.target
+
+   [Service]
+   Type=simple
+   User=username
+   ExecStart=/usr/local/bin/ngrok http 5000 --log=stdout
+   Restart=on-failure
+   RestartSec=5
+
+   [Install]
+   WantedBy=multi-user.target
+
+4. Set Permissions and Enable the Service:
+   sudo chmod 644 /etc/systemd/system/ngrok.service
+   sudo systemctl daemon-reload
+   sudo systemctl enable ngrok.service
+   sudo systemctl start ngrok.service
+   sudo systemctl status ngrok.service
+
+--------------------------------------------------------------------------------
+7. ALISA SYSTEMD BACKGROUND SERVICE SETUP & PERMISSIONS
+--------------------------------------------------------------------------------
+To run `alisa.py` persistently as an automated background system service upon system boot:
+
+1. Create a dedicated systemd service unit file for Alisa:
+   sudo nano /etc/systemd/system/alisa.service
+
+2. Paste the following service configuration block (be sure to replace `username` 
+   with your actual Linux user account):
+
+   [Unit]
+   Description=Alisa Smart Assistant Service
+   After=network.target sound.target
+
+   [Service]
+   Type=simple
+   User=username
+   WorkingDirectory=/home/username/Alisa
+   ExecStart=/usr/bin/python3 /home/username/Alisa/alisa.py
+   Restart=on-failure
+   RestartSec=10
+   Environment=DISPLAY=:0
+   Environment=XAUTHORITY=/home/username/.Xauthority
+
+   [Install]
+   WantedBy=multi-user.target
+
+3. Set Correct File Permissions on the Service File:
+   Systemd service files must have strict root ownership and proper read permissions (644):
+   sudo chown root:root /etc/systemd/system/alisa.service
+   sudo chmod 644 /etc/systemd/system/alisa.service
+
+4. Ensure Execute Permissions on Your Application Scripts:
+   Make sure your Python script and media directories are fully accessible by your user:
+   chmod +x /home/username/Alisa/alisa.py
+
+5. Enable and Start the Alisa Service:
+   sudo systemctl daemon-reload
+   sudo systemctl enable alisa.service
+   sudo systemctl start alisa.service
+   sudo systemctl status alisa.service
+
+--------------------------------------------------------------------------------
+8. TELEGRAM WEBHOOK CONFIGURATION
+--------------------------------------------------------------------------------
+To connect your Telegram bot webhook to your ngrok tunnel endpoint so that Alisa 
+can receive live messages and interaction updates:
+
+1. Obtain your public ngrok URL (e.g., https://xxxx-xx-xx.ngrok-free.app).
+2. Register the webhook via a web browser or by running a curl command in your terminal:
+   
+   curl -X POST "https://api.telegram.org/bot<YOUR_TELEGRAM_BOT_TOKEN>/setWebhook?url=https://xxxx-xx-xx.ngrok-free.app/webhook"
+
+3. Verify the Webhook status by visiting:
+   https://api.telegram.org/bot<YOUR_TELEGRAM_BOT_TOKEN>/getWebhookInfo
+
+--------------------------------------------------------------------------------
+9. DESKTOP LAUNCHER & AUTO-START CONFIGURATION (ALTERNATIVE GUI MODE)
+--------------------------------------------------------------------------------
+If you prefer running Alisa through the desktop GUI session rather than a headless systemd service:
+
+1. Create the Desktop Entry File:
+   nano ~/.local/share/applications/alisa.desktop
+
+2. Paste the Desktop Application Configuration:
+   [Desktop Entry]
+   Type=Application
+   Name=Alisa Smart Clock
+   Comment=Voice-controlled smart clock and assistant
+   Exec=python3 /home/username/Alisa/alisa.py
+   Icon=utilities-clock
+   Terminal=false
+   Categories=Utility;Clock;
+
+3. Copy to Desktop and Make Executable:
+   cp ~/.local/share/applications/alisa.desktop ~/Desktop/
+   chmod +x ~/Desktop/alisa.desktop
+
+4. Configure Autostart:
+   mkdir -p ~/.config/autostart
+   cp ~/.local/share/applications/alisa.desktop ~/.config/autostart/
+
+--------------------------------------------------------------------------------
+10. WINDOWS LISTENER CONFIGURATION (config.json) & SCRIPT
+--------------------------------------------------------------------------------
+To run the companion listener on a Windows machine to track emergency alerts 
+and notifications:
+
+1. Create a configuration file named `config.json` in the same directory 
+   as your listener script with the following contents:
+
+{
+  "MAIN_PC_NGROK_URL": "https://<your-ngrok-subdomain>.ngrok-free.app"
+}
+
+   - MAIN_PC_NGROK_URL: The public ngrok URL exposed by your Alisa Linux instance.
+
+2. Open a command prompt (cmd) window.
+3. Install the required HTTP library:
+   pip install requests
+
+4. Create a file named `alisa_listener.py` and paste the following Python script:
+
+import time
+import requests
+import json
+import os
+import sys
+import threading
+import tkinter as tk
+from tkinter import messagebox
+
+CONFIG_FILE = "config.json"
+
+if os.path.exists(CONFIG_FILE):
+    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    MAIN_PC_URL = config.get("MAIN_PC_NGROK_URL", "").rstrip("/")
+else:
+    print("Файл config.json не найден!")
+    exit()
+
+alarm_active = False
+alarm_silenced = False
+current_emergency_text = ""
+emergency_popup = None
+
+print("Слушатель экстренных оповещений через главный ПК запущен...")
+print(f"Опрос главного ПК по адресу: {MAIN_PC_URL}")
+print("Ожидание экстренных сигналов... (Закройте окно или нажмите Ctrl+C для выхода)")
+
+def play_beep_sound(frequency, duration):
+    try:
+        import winsound
+        winsound.Beep(frequency, duration)
+    except Exception:
+        pass
+
+def poll_server():
+    global alarm_active, alarm_silenced, current_emergency_text
+    while True:
+        try:
+            response = requests.get(f"{MAIN_PC_URL}/check_emergency", timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                status = data.get("status", "cleared")
+                emergency_text = data.get("emergency", "Экстренная ситуация!")
+
+                if status == "active":
+                    if not alarm_active:
+                        alarm_active = True
+                        alarm_silenced = False
+                        current_emergency_text = emergency_text
+                        print("\nТРЕВОГА НА ВТОРОМ ПК! Получено экстренное сообщение: --> '" + current_emergency_text + "'")
+                        root.after(0, show_emergency_dialog)
+                elif status == "cleared" and alarm_active:
+                    alarm_active = False
+                    alarm_silenced = False
+                    print("\nТРЕВОГА ОТМЕНЕНА НА ГЛАВНОМ ПК. Всё в порядке.")
+                    play_beep_sound(1000, 200)
+                    play_beep_sound(1000, 200)
+                    root.after(0, close_emergency_dialog)
+        except requests.exceptions.RequestException as e:
+            pass
+        time.sleep(3)
+
+def audio_alarm_loop():
+    while True:
+        if alarm_active and not alarm_silenced:
+            play_beep_sound(2500, 1000)
+        else:
+            time.sleep(0.5)
+
+def silence_alarm():
+    global alarm_silenced
+    alarm_silenced = True
+    status_label.config(text="ТРЕВОГА АКТИВНА (Звук выключен)", fg="orange")
+
+def show_emergency_dialog():
+    global emergency_popup, status_label, text_box, current_emergency_text
+    msg_to_display = current_emergency_text if current_emergency_text else "Экстренная ситуация на главном ПК!"
+
+    if emergency_popup is not None and tk.Toplevel.winfo_exists(emergency_popup):
+        text_box.config(state=tk.NORMAL)
+        text_box.delete("1.0", tk.END)
+        text_box.insert(tk.END, msg_to_display)
+        text_box.config(state=tk.DISABLED)
+        status_label.config(text="АКТИВНАЯ ТРЕВОГА!", fg="red")
+        emergency_popup.lift()
+        return
+
+    emergency_popup = tk.Toplevel(root)
+    emergency_popup.title("ЭКСТРЕННАЯ ТРЕВОГА!")
+    emergency_popup.geometry("450x380")
+    emergency_popup.config(bg="#ffe6e6")
+    emergency_popup.attributes("-topmost", True)
+
+    status_label = tk.Label(emergency_popup, text="АКТИВНАЯ ТРЕВОГА НА ГЛАВНОМ ПК!", font=("Arial", 12, "bold"), fg="red", bg="#ffe6e6")
+    status_label.pack(pady=12)
+
+    tk.Label(emergency_popup, text="Детали оповещения:", font=("Arial", 10, "bold"), bg="#ffe6e6").pack(anchor="w", padx=20)
+
+    text_box = tk.Text(emergency_popup, height=7, width=48, font=("Arial", 10), wrap=tk.WORD)
+    text_box.insert(tk.END, msg_to_display)
+    text_box.config(state=tk.DISABLED)
+    text_box.pack(padx=20, pady=5)
+
+    btn_silence = tk.Button(emergency_popup, text="Выключить звук", font=("Arial", 11, "bold"), bg="#ffcccc", fg="#990000", command=silence_alarm)
+    btn_silence.pack(pady=15, ipadx=15, ipady=6)
+
+def close_emergency_dialog():
+    global emergency_popup
+    if emergency_popup is not None and tk.Toplevel.winfo_exists(emergency_popup):
+        emergency_popup.destroy()
+        emergency_popup = None
+
+root = tk.Tk()
+root.withdraw()
+
+threading.Thread(target=poll_server, daemon=True).start()
+threading.Thread(target=audio_alarm_loop, daemon=True).start()
+
+try:
+    root.mainloop()
+except KeyboardInterrupt:
+    sys.exit(0)
+
+5. Run the listener script:
+   python alisa_listener.py
