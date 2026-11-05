@@ -76,7 +76,8 @@ class AlisaApp:
         self.unread_messages = []  # Stores incoming message dictionaries/texts
         self.read_messages = []    # Stores read message dictionaries/texts
         self.last_update_id = 0    # Tracks processed Telegram updates
-      
+ 
+        self.last_activity_time = time.time()     
         self.display_mode = "clock"
         self.load_messages()
         # 1. Setup UI elements first
@@ -115,6 +116,8 @@ class AlisaApp:
         self.shift_position()
         self.restore_pending_reminders()
 
+        # Start idle checker loop
+        threading.Thread(target=self.idle_checker_loop, daemon=True).start()
         threading.Thread(target=self.voice_listener_loop, daemon=True).start()
         threading.Thread(target=self.telegram_polling_loop, daemon=True).start()
         threading.Thread(target=self.start_local_web_server, daemon=True).start()
@@ -164,6 +167,20 @@ class AlisaApp:
         
         raw_chime = default_config.get("CHIME_SOUND_PATH", "Sounds/alarm-clock-1.mp3")
         self.chime_sound_path = raw_chime if os.path.isabs(raw_chime) else os.path.join(SCRIPT_DIR, raw_chime)
+
+    def idle_checker_loop(self):
+        """Checks every 15 minutes if Alisa has been idle; turns screen off if so."""
+        while self.is_running:
+            time.sleep(60)  # Check every minute
+            # 15 minutes = 900 seconds
+            if time.time() - self.last_activity_time >= 900:
+                try:
+                    # Check if monitor is currently on
+                    dpms_check = subprocess.run(["xset", "q"], capture_output=True, text=True)
+                    if "Monitor is On" in dpms_check.stdout:
+                        self.turn_screen_off()
+                except Exception as e:
+                    print(f"Ошибка проверки или выключения по таймеру простоя: {e}")
 
     def handle_webhook_update(self, data):
         """Processes messages pushed from Telegram via webhook (replaces polling)."""
@@ -1166,10 +1183,14 @@ class AlisaApp:
                         recognized_text = json.loads(rec.Result()).get("text", "").lower()
                         if any(phrase in recognized_text for phrase in ["алиса тревога", "алиса мне плохо"]):
                             if self.display_mode != "emergency": # <--- Add this guard
+                                self.last_activity_time = time.time()
+                                self.turn_screen_on()
                                 self.trigger_emergency_mode()
                             break
                         
                         if "алиса" in recognized_text or "alisa" in recognized_text:
+                            self.last_activity_time = time.time()
+                            self.turn_screen_on()
                             self.speak_russian("Слушаю.")
                             break
 
@@ -1198,6 +1219,9 @@ class AlisaApp:
                 if frames and self.is_running:
                     try:
                         query = r.recognize_google(sr.AudioData(b''.join(frames), RATE, 2), language="ru-RU").lower()
+                        # Update last activity & ensure screen is on
+                        self.last_activity_time = time.time()
+                        self.turn_screen_on()
                     except Exception as e:
                         print(f"Ошибка распознавания речи: {e}")
                         continue
