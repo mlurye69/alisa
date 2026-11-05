@@ -66,8 +66,9 @@ class AlisaApp:
 
         subprocess.run(["xset", "s", "off"])
         subprocess.run(["xset", "-dpms"])
+        subprocess.run(["xset", "dpms", "0", "0", "0"])
         subprocess.run(["xset", "s", "noblank"])
-        subprocess.run(["xset", "s", "0", "0"])  # Disables screen saver timeout entirely
+        subprocess.run(["xset", "s", "0", "0"])
 
         self.load_config()
 
