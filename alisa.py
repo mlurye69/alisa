@@ -1219,9 +1219,6 @@ class AlisaApp:
                 if frames and self.is_running:
                     try:
                         query = r.recognize_google(sr.AudioData(b''.join(frames), RATE, 2), language="ru-RU").lower()
-                        # Update last activity & ensure screen is on
-                        self.last_activity_time = time.time()
-                        self.turn_screen_on()
                     except Exception as e:
                         print(f"Ошибка распознавания речи: {e}")
                         continue
