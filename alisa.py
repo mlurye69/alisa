@@ -1045,7 +1045,38 @@ class AlisaApp:
                         else:
                             self.speak_russian("Не поняла время будильника.")
                     
-                    # 3. Reminders & Tasks
+                    # 3. Reminders & Tasks Deletion (CHECK THIS FIRST)
+                    elif any(w in query for w in ["удали", "сотри", "убери"]) and any(w in query for w in ["напоминание", "напоминания"]):
+                        number_words = {
+                            "один": 1, "одну": 1, "первое": 1, "первый": 1,
+                            "два": 2, "две": 2, "второе": 2, "второй": 2,
+                            "три": 3, "третье": 3, "третий": 3,
+                            "четыре": 4, "четвертое": 4, "четвертый": 4,
+                            "пять": 5, "пятое": 5, "пятый": 5,
+                            "шесть": 6, "шестое": 6, "шестой": 6,
+                            "семь": 7, "седьмое": 7, "седьмой": 7,
+                            "восемь": 8, "восьмое": 8, "восьмой": 8,
+                            "девять": 9, "девятое": 9, "девятый": 9,
+                            "десять": 10, "десятое": 10, "десятый": 10
+                        }
+                        
+                        rem_num = None
+                        match_num = re.search(r"(?:удали|удалить|сотри|убери)\s+(?:напоминание\s+)?(?:номер\s+)?(\d+)", query)
+                        if match_num:
+                            rem_num = int(match_num.group(1))
+                        else:
+                            words_in_query = query.split()
+                            for word, val in number_words.items():
+                                if word in words_in_query:
+                                    rem_num = val
+                                    break
+                                    
+                        if rem_num:
+                            self.remove_reminder_by_index(rem_num)
+                        else:
+                            self.speak_russian("Укажите номер напоминания для удаления.")
+
+                    # 4. Reminders & Tasks Creation (CHECK THIS SECOND)
                     elif any(w in query for w in ["напомни", "напоминание"]):
                         # Match delay format (e.g. "напомни взять таблетки через 5 минут" or "добавь напоминание взять таблетки через 5 минут")
                         match_delay = re.search(r"(?:напомни|напоминание|добавь\s+напоминание|установи\s+напоминание)\s+(.*?)\s+через\s+(\d+)\s*(минут|минуту|минуты|час|часа|часов)", query)
@@ -1306,38 +1337,6 @@ class AlisaApp:
                             while self.unread_messages:
                                 self.read_messages.append(self.unread_messages.pop(0))
                             self.save_messages()
-                    elif any(w in query for w in ["удали", "сотри", "убери"]) and any(w in query for w in ["напоминание", "напоминания"]):
-                        number_words = {
-                            "один": 1, "одну": 1, "первое": 1, "первый": 1,
-                            "два": 2, "две": 2, "второе": 2, "второй": 2,
-                            "три": 3, "третье": 3, "третий": 3,
-                            "четыре": 4, "четвертое": 4, "четвертый": 4,
-                            "пять": 5, "пятое": 5, "пятый": 5,
-                            "шесть": 6, "шестое": 6, "шестой": 6,
-                            "семь": 7, "седьмое": 7, "седьмой": 7,
-                            "восемь": 8, "восьмое": 8, "восьмой": 8,
-                            "девять": 9, "девятое": 9, "девятый": 9,
-                            "десять": 10, "десятое": 10, "десятый": 10
-                        }
-                        
-                        rem_num = None
-                        # 1. Try finding numeric digits first
-                        match_num = re.search(r"(?:удали|удалить|сотри|убери)\s+(?:напоминание\s+)?(?:номер\s+)?(\d+)", query)
-                        if match_num:
-                            rem_num = int(match_num.group(1))
-                        else:
-                            # 2. Check for written number words using word boundaries or exact checks
-                            words_in_query = query.split()
-                            for word, val in number_words.items():
-                                if word in words_in_query:
-                                    rem_num = val
-                                    break
-                                    
-                        if rem_num:
-                            self.remove_reminder_by_index(rem_num)
-                        else:
-                            self.speak_russian("Укажите номер напоминания для удаления.")
-
                     # 5. General Commands & AI Fallback
                     elif any(w in query for w in ["список команд", "команды", "справка"]):
                         self.show_info_screen("Справочник команд", COMMAND_LIST_TEXT, "Показываю список доступных команд.")
