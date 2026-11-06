@@ -34,6 +34,8 @@ COMMAND_LIST_TEXT = (
     "• Алиса, будильник на [время]\n"
     "• Алиса, выключи будильник\n"
     "• Алиса, который час\n"
+    "• Алиса, какой сегодня день недели\n"
+    "• Алиса, какое сегодня число\n"
     "• Алиса, введи/отмени режим тревоги (или 'все хорошо')\n"
     "• Алиса, включи свет / выключи свет\n"
     "• Алиса, включи часы / покажи часы\n"
@@ -826,7 +828,8 @@ class AlisaApp:
                 months_ru = ["", "Января", "Февраля", "Марта", "Апреля", "Мая", "Июня", "Июля", "Августа", "Сентября", "Октября", "Ноября", "Декабря"]
                 
                 t = time.localtime()
-                date_str = f"{days_ru[t.tm_wday]}, {t.tm_mday} {months_ru[t.tm_mon]}"
+                # Added year (t.tm_year) to the date string
+                date_str = f"{days_ru[t.tm_wday]}, {t.tm_mday} {months_ru[t.tm_mon]} {t.tm_year}"
                 current_hm = time.strftime('%H:%M')
                 
                 self.date_label.config(text=date_str)
@@ -848,7 +851,6 @@ class AlisaApp:
                 elif current_hm != self.alarm_time:
                     self.alarm_triggered_today = False
                 
-        #self.root.after(1000, self.update_display)
         except Exception as e:
             print(f"Error in update_display: {e}")
         finally:
@@ -1613,6 +1615,21 @@ class AlisaApp:
                     elif "который час" in query or any(w in query for w in ["сколько","сейчас"]) and any(w in query for w in ["времени","время"]):
                         current_time_str = time.strftime('%H:%M')
                         self.speak_russian(f"Сейчас {current_time_str}")
+                    
+                    # --- NEW: Day of week query ---
+                    elif any(w in query for w in ["день недели", "какой сегодня день"]) or ("какой" in query and "день" in query):
+                        days_ru = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+                        t = time.localtime()
+                        current_day_name = days_ru[t.tm_wday]
+                        self.speak_russian(f"Сегодня {current_day_name.lower()}")
+                    
+                    # --- NEW: Date query ---
+                    elif any(w in query for w in ["какое сегодня число", "сегодня какое число", "какая дата", "сегодняшняя дата"]):
+                        days_ru = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+                        months_ru = ["", "января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
+                        t = time.localtime()
+                        date_speech = f"Сегодня {days_ru[t.tm_wday]}, {t.tm_mday} {months_ru[t.tm_mon]} {t.tm_year} года"
+                        self.speak_russian(date_speech)
                     elif "выключи экран" in query:
                         self.speak_russian("Экран выключен.")
                         self.turn_screen_off()
