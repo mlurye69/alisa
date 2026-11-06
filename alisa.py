@@ -360,10 +360,20 @@ class AlisaApp:
 
     def remove_reminder_by_index(self, index_1_based):
         try:
-            display_reminders = sorted([r for r in self.reminders if not r.get("is_alarm")], key=lambda x: x["timestamp"])
+            # Strictly use the exact same sorting and filtering logic as get_formatted_reminders_display()
+            display_reminders = [r for r in self.reminders if not r.get("is_alarm")]
+            daily_reminders = [r for r in display_reminders if r.get("daily")]
+            one_off_reminders = [r for r in display_reminders if not not r.get("daily")] # or not r.get("daily")
+            
+            daily_reminders.sort(key=lambda x: datetime.fromtimestamp(x["timestamp"]).strftime('%H:%M'))
+            one_off_reminders.sort(key=lambda x: x["timestamp"])
+            
+            ordered_display_list = daily_reminders + one_off_reminders
+            
             idx = index_1_based - 1
-            if 0 <= idx < len(display_reminders):
-                self.reminders.remove(display_reminders[idx])
+            if 0 <= idx < len(ordered_display_list):
+                target_rem = ordered_display_list[idx]
+                self.reminders.remove(target_rem)
                 self.save_reminders()
                 if self.display_mode == "info":
                     self.refresh_reminder_info_screen()
