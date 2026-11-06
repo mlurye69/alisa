@@ -31,7 +31,7 @@ MONTHS_RU = {
 
 COMMAND_LIST_TEXT = (
     "Доступные голосовые команды:\n"
-    "• Алиса, будильник на [время]\n"
+    "• Алиса, будильник на [время] / разбуди меня в [время]\n"
     "• Алиса, выключи будильник\n"
     "• Алиса, который час\n"
     "• Алиса, какой сегодня день недели\n"
@@ -96,7 +96,7 @@ class AlisaApp:
         self.alarm_active = False
         self.alarm_stop_event = threading.Event()
         self.active_audio_process = None
-        self.ambient_noise_threshold = 300  # Will be calibrated dynamically
+        self.ambient_noise_threshold = 300  
 
         self.light_timer = None
         self.weather_timer = None
@@ -762,7 +762,6 @@ class AlisaApp:
                             self.save_messages()
                             self.root.after(0, self.update_unread_alarm_label)
                             
-                            # Smart briefing summary via LLM if cluster gets large
                             if len(self.unread_messages) >= 3:
                                 self.speak_russian(f"У вас накопилось {len(self.unread_messages)} непрочитанных сообщений, включая новые от {sender_name}.")
                             else:
@@ -838,12 +837,12 @@ class AlisaApp:
             p.terminate()
             return
 
-        # --- Adaptive Ambient Noise Floor Calibration ---
+        # Adaptive Ambient Noise Calibration
         print("Калибровка уровня шума окружающей среды...")
         try:
             calib_stream = p.open(format=pyaudio.paInt16, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
             rms_samples = []
-            for _ in range(25):  # ~1.5 seconds calibration window
+            for _ in range(25):  
                 data = calib_stream.read(CHUNK, exception_on_overflow=False)
                 if data:
                     rms_samples.append(audioop.rms(data, 2))
@@ -855,7 +854,6 @@ class AlisaApp:
                 print(f"Калибровка шума завершена. Порог установлен на: {self.ambient_noise_threshold}")
         except Exception as e:
             print(f"Calibration warning: {e}")
-        # -----------------------------------------------
 
         def clear_init():
             self.init_status_label.pack_forget()
@@ -876,13 +874,13 @@ class AlisaApp:
                         txt = json.loads(rec.Result()).get("text", "").lower()
                         if any(p_str in txt for p_str in ["алиса тревога", "алиса мне плохо"]):
                             if self.display_mode != "emergency":
-                                self.stop_all_audio()  # Barge-in support
+                                self.stop_all_audio()  
                                 self.last_activity_time = time.time()
                                 self.turn_screen_on()
                                 self.trigger_emergency_mode()
                             break
                         if "алиса" in txt or "alisa" in txt:
-                            self.stop_all_audio()  # Barge-in support
+                            self.stop_all_audio()  
                             self.last_activity_time = time.time()
                             self.turn_screen_on()
                             self.speak_russian("Слушаю.")
@@ -917,7 +915,7 @@ class AlisaApp:
                     
                     print(f"Распознано: {query}")
 
-                    # Command Dispatcher Logic
+                    # 1. Emergency Commands
                     if any(w in query for w in ["отмена тревоги", "все хорошо", "всё в порядке"]):
                         self.speak_russian("Режим тревоги отменен.")
                         global latest_emergency_message
@@ -930,17 +928,43 @@ class AlisaApp:
                             self.trigger_emergency_mode()
                         continue
 
-                    # --- ROBUST ALARM DISPATCHER ---
+                    # 2. Display / Screen Mode & Hardware Power Commands
+                    if any(w in query for w in ["включи часы", "покажи часы", "часы"]):
+                        self.restore_clock_mode()
+                        self.speak_russian("Включаю часы.")
+                        continue
+                    elif any(w in query for w in ["включи свет", "свет"]) and "выключи" not in query:
+                        self.turn_light_on()
+                        self.speak_russian("Включаю свет.")
+                        continue
+                    elif any(w in query for w in ["выключи свет"]):
+                        self.turn_light_off()
+                        self.speak_russian("Выключаю свет.")
+                        continue
+                    elif any(w in query for w in ["выключить компьютер", "выключи компьютер"]):
+                        self.speak_russian("Выключаю компьютер.")
+                        time.sleep(1)
+                        subprocess.run(["sudo", "shutdown", "now"])
+                        continue
+                    elif any(w in query for w in ["выключи экран"]):
+                        self.turn_screen_off()
+                        self.speak_russian("Экран выключен.")
+                        continue
+                    elif any(w in query for w in ["включи экран"]):
+                        self.turn_screen_on()
+                        self.speak_russian("Экран включен.")
+                        continue
+
+                    # 3. Alarm Commands (Robust parsing for "будильник" and "разбуди")
                     is_alarm_intent = ("будильник" in query) or ("разбуди" in query) or ("разбудить" in query)
-                    
                     if is_alarm_intent and any(w in query for w in ["выключи", "отмени", "удали"]):
                         self.alarm_time = None
                         self.alarm_display_label.config(text="")
                         self.reminders = [item for item in self.reminders if not item.get("is_alarm")]
                         self.save_reminders()
                         self.speak_russian("Будильник выключен.")
+                        continue
                     elif is_alarm_intent:
-                        # Improved regex: optional preposition 'в', hours, optional minutes, optional modifier
                         match_a = re.search(r"(?:в\s*)?(\d{1,2})(?::(\d{2}))?\s*(?:час(?:а|ов)?)?\s*(вечера|дня|утра)?", query)
                         if match_a:
                             h = int(match_a.group(1))
@@ -963,16 +987,24 @@ class AlisaApp:
                             self.speak_russian(f"Будильник установлен на {h:02d}:{m:02d}.")
                         else:
                             self.speak_russian("Не поняла время будильника.")
-                    elif any(w in query for w in ["список команд", "команды", "справка"]):
+                        continue
+
+                    # 4. Info Screens, Reminders & Weather
+                    if any(w in query for w in ["список команд", "команды", "справка"]):
                         self.show_info_screen("Справочник команд", COMMAND_LIST_TEXT, "Показываю список доступных команд.")
+                        continue
                     elif "погода" in query:
                         self.show_info_screen(f"Погода ({self.city})", self.current_weather_text, f"Погода: {self.current_weather_text}")
+                        continue
                     elif any(w in query for w in ["напоминания", "список напоминаний", "мои напоминания"]):
                         reminders_text, speech_announcement = self.get_formatted_reminders_display()
                         self.show_info_screen("Активные напоминания", reminders_text, speech_announcement)
-                    else:
-                        ai_answer = self.ask_ai(query)
-                        self.speak_russian(ai_answer)
+                        continue
+
+                    # 5. General AI Fallback
+                    ai_answer = self.ask_ai(query)
+                    self.speak_russian(ai_answer)
+
             except Exception as e:
                 print(f"Listener loop exception: {e}")
                 if stream:
