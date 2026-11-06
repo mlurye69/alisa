@@ -337,7 +337,8 @@ class AlisaApp:
         self.reminders.sort(key=lambda x: x["timestamp"])
         self.save_reminders()
         
-        if self.display_mode == "info" and ("напоминаний" in self.date_label.cget("text").lower() or "список" in self.date_label.cget("text").lower()):
+        # To this:
+        if self.display_mode == "info" and any(w in self.date_label.cget("text").lower() for w in ["напомин", "список", "актив"]):
             self.refresh_reminder_info_screen()
         
         self.root.after(0, lambda: threading.Timer(delay_seconds, self.trigger_reminder, args=[reminder]).start())
