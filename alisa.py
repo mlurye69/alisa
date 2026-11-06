@@ -576,15 +576,16 @@ class AlisaApp:
         self.alarm_display_label = tk.Label(self.frame, text="", font=('Helvetica', 24, 'bold'), fg='mediumpurple', bg='black', anchor='w')
         self.alarm_display_label.pack(anchor='w', pady=(10, 0))
 
+        # Replace the idle_countdown_label definition in setup_ui() with this:
         self.idle_countdown_label = tk.Label(
-            self.frame, 
+            self.root, 
             text="", 
-            font=('Helvetica', 14, 'bold'), 
+            font=('Helvetica', 16, 'bold'), 
             fg='dim gray', 
             bg='black', 
-            anchor='e'
+            anchor='se'
         )
-        # Anchor to bottom-right (rely=0.98, relx=0.98 with anchor='se')
+        # Place it relative to the root window so it's always pinned to the bottom-right corner of the screen
         self.idle_countdown_label.place(relx=0.98, rely=0.98, anchor='se')
 
     def turn_light_on(self):
