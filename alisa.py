@@ -1013,7 +1013,7 @@ class AlisaApp:
                         pass
 
                     # 1. Emergency Commands
-                    elif any(phrase in query for phrase in ["отмена тревоги", "отмени тревогу", "все хорошо", "всё в порядке"]):
+                    if any(phrase in query for phrase in ["отмена тревоги", "отмени тревогу", "все хорошо", "всё в порядке"]):
                         self.last_activity_time = time.time()  # Reset idle timer on interaction
                         self.speak_russian("Режим тревоги отменен.")
                         global latest_emergency_message
