@@ -930,15 +930,18 @@ class AlisaApp:
                             self.trigger_emergency_mode()
                         continue
 
-                    # Fallback / Intent Handling via LLM or Regex
-                    if "будильник" in query and any(w in query for w in ["выключи", "отмени", "удали"]):
+                    # --- ROBUST ALARM DISPATCHER ---
+                    is_alarm_intent = ("будильник" in query) or ("разбуди" in query) or ("разбудить" in query)
+                    
+                    if is_alarm_intent and any(w in query for w in ["выключи", "отмени", "удали"]):
                         self.alarm_time = None
                         self.alarm_display_label.config(text="")
                         self.reminders = [item for item in self.reminders if not item.get("is_alarm")]
                         self.save_reminders()
                         self.speak_russian("Будильник выключен.")
-                    elif "будильник" in query:
-                        match_a = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(?:час(?:а|ов)?)?\s*(вечера|дня|утра)?", query)
+                    elif is_alarm_intent:
+                        # Improved regex: optional preposition 'в', hours, optional minutes, optional modifier
+                        match_a = re.search(r"(?:в\s*)?(\d{1,2})(?::(\d{2}))?\s*(?:час(?:а|ов)?)?\s*(вечера|дня|утра)?", query)
                         if match_a:
                             h = int(match_a.group(1))
                             m = int(match_a.group(2)) if match_a.group(2) else 0
