@@ -967,6 +967,9 @@ class AlisaApp:
                         self.show_info_screen("Справочник команд", COMMAND_LIST_TEXT, "Показываю список доступных команд.")
                     elif "погода" in query:
                         self.show_info_screen(f"Погода ({self.city})", self.current_weather_text, f"Погода: {self.current_weather_text}")
+                    elif any(w in query for w in ["напоминания", "список напоминаний", "мои напоминания"]):
+                        reminders_text, speech_announcement = self.get_formatted_reminders_display()
+                        self.show_info_screen("Активные напоминания", reminders_text, speech_announcement)
                     else:
                         ai_answer = self.ask_ai(query)
                         self.speak_russian(ai_answer)
