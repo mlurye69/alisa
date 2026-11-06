@@ -31,7 +31,7 @@ MONTHS_RU = {
 
 COMMAND_LIST_TEXT = (
     "Доступные голосовые команды:\n"
-    "• Алиса, будильник на [время] / разбуди меня в [время]\n"
+    "• Алиса, будильник на [время]\n"
     "• Алиса, выключи будильник\n"
     "• Алиса, который час\n"
     "• Алиса, какой сегодня день недели\n"
@@ -83,6 +83,7 @@ class AlisaApp:
         self.display_mode = "clock"
         self.load_messages()
         
+        self.richten_ui_and_state()
         self.setup_ui()
         self.update_unread_alarm_label()
 
@@ -96,7 +97,7 @@ class AlisaApp:
         self.alarm_active = False
         self.alarm_stop_event = threading.Event()
         self.active_audio_process = None
-        self.ambient_noise_threshold = 300  
+        self.ambient_noise_threshold = 300  # Will be dynamically calibrated
 
         self.light_timer = None
         self.weather_timer = None
@@ -120,6 +121,9 @@ class AlisaApp:
         threading.Thread(target=self.start_local_web_server, daemon=True).start()
         self.root.after(5000, lambda: self.check_for_updates(manual=False))
 
+    def richten_ui_and_state(self):
+        pass
+
     def load_config(self):
         default_config = {
             "DEVICE_NAME": socket.gethostname(), 
@@ -127,11 +131,11 @@ class AlisaApp:
             "WEATHER_API_KEY": "YOUR_WEATHER_API_KEY",
             "CITY": "Boston",
             "TELEGRAM_BOT_TOKEN": "",
-            "CHANNEL_ID": "",
+            "CHAT_CHANNEL_ID": "",
             "EMERGENCY_CHANNEL_ID": "",
             "CONTACTS": {},
             "VOSK_MODEL_PATH": os.path.join(SCRIPT_DIR, "vosk-model-small-ru-0.22"),
-            "GITHUB_RAW_URL": "",
+            "GITHUB_RAW_URL": "https://raw.githubusercontent.com/mlurye69/alisa/main/alisa.py",
             "CHIME_SOUND_PATH": "Sounds/alarm-clock-1.mp3"
         }
 
@@ -418,6 +422,40 @@ class AlisaApp:
             print(f"Send message error: {e}")
             return False
 
+    def get_last_telegram_messages_display(self, limit=5):
+        if not self.telegram_bot_token:
+            return "Telegram не настроен.", "Токен Telegram не задан."
+        all_live_msgs = []
+        try:
+            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates?allowed_updates=[\"message\",\"channel_post\"]"
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                for result in data.get("result", []):
+                    msg = result.get("message") or result.get("channel_post", {})
+                    chat = msg.get("chat", {})
+                    text = msg.get("text")
+                    if text:
+                        timestamp = msg.get("date", time.time())
+                        all_live_msgs.append({
+                            "sender": chat.get("title") or chat.get("first_name", "Контакт"),
+                            "time": datetime.fromtimestamp(timestamp).strftime('%H:%M'),
+                            "timestamp": timestamp,
+                            "text": text
+                        })
+        except Exception as e:
+            print(f"Error fetching live history: {e}")
+
+        if not all_live_msgs:
+            return "В Telegram нет доступных для просмотра сообщений в буфере.", "В Telegram нет сообщений."
+            
+        all_live_msgs.sort(key=lambda x: x["timestamp"])
+        last_msgs = all_live_msgs[-limit:]
+        lines = [f"--- Telegram (последние {len(last_msgs)}) ---"]
+        for idx, m in enumerate(last_msgs, 1):
+            lines.append(f"{idx}. {m['sender']} ({m['time']}): {m['text']}")
+        return "\n".join(lines), f"Показываю последние {len(last_msgs)} сообщений из Телеграма."
+
     def load_messages(self):
         messages_file = os.path.join(SCRIPT_DIR, "messages.json")
         if os.path.exists(messages_file):
@@ -466,6 +504,12 @@ class AlisaApp:
         self.speak_russian(f"Внимание! Включен режим тревоги на компьютере {self.device_name}. Немедленно звоните 911!")
         self.emergency_chirp_timer = threading.Timer(60.0, self.trigger_emergency_voice_reminder)
         self.emergency_chirp_timer.start()
+
+    def fetch_telegram_channel_history(self, chat_id, limit=5):
+        all_known = list(self.unread_messages) + list(self.read_messages)
+        user_msgs = [m for m in all_known if str(m.get("chat_id")) == str(chat_id)]
+        user_msgs.sort(key=lambda x: x.get("time", ""), reverse=False)
+        return user_msgs[-limit:] if user_msgs else []
 
     def get_city_by_ip(self):
         try:
@@ -533,6 +577,13 @@ class AlisaApp:
         self.countdown_seconds = 300
         self.update_countdown_timer()
 
+    def shutdown_computer(self):
+        self.speak_russian("Выключаю компьютер.")
+        try:
+            subprocess.Popen(["systemctl", "poweroff"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            print(f"Shutdown error: {e}")
+
     def update_countdown_timer(self):
         if self.display_mode == "clock":
             return
@@ -566,7 +617,7 @@ class AlisaApp:
         if self.active_audio_process:
             try:
                 self.active_audio_process.terminate()
-                self.active_audio_process.wait(timeout=0.1)
+                self.active_audio_process.wait(timeout=0.5)
             except Exception:
                 try: self.active_audio_process.kill()
                 except: pass
@@ -576,6 +627,8 @@ class AlisaApp:
         self.stop_all_audio()
         os.system("pkill -9 mpg123 2>/dev/null")
         os.system("pkill -9 play 2>/dev/null")
+        os.system("pkill -9 aplay 2>/dev/null")
+        os.system("pkill -9 paplay 2>/dev/null")
         time.sleep(0.15)
 
         def speech_worker():
@@ -648,6 +701,11 @@ class AlisaApp:
                     break
                 time.sleep(0.1)
         self.alarm_active = False
+        for rem in self.reminders:
+            if rem.get("is_alarm"):
+                rem["timestamp"] = (datetime.fromtimestamp(rem["timestamp"]) + timedelta(days=1)).timestamp()
+                self.save_reminders()
+                break
 
     def fetch_weather(self):
         if self.weather_api_key != "YOUR_WEATHER_API_KEY":
@@ -712,7 +770,7 @@ class AlisaApp:
             system_prompt = (
                 f"Ты голосовой ассистент на умных часах. "
                 f"Текущая дата: {curr_date}. Город: {self.city}. "
-                f"Если пользователь просит классифицировать намерение или сводку, отвечай строго в формате структурированной json схемы или кратко на русском (1-2 предложения)."
+                f"Отвечай кратко, по делу, исключительно на русском языке, максимум в 1-2 предложениях."
             )
 
             self.conversation_history.append({"role": "user", "content": prompt})
@@ -751,21 +809,22 @@ class AlisaApp:
                         chat = msg.get("chat", {})
                         chat_id = str(chat.get("id", ""))
                         
-                        sender_name = chat.get("title") or chat.get("first_name", "Контакт")
+                        sender_name = "Неизвестный"
                         if chat_id in self.contacts:
                             c_info = self.contacts[chat_id]
-                            sender_name = c_info.get("name", sender_name) if isinstance(c_info, dict) else sender_name
+                            sender_name = c_info.get("name", "Пользователь") if isinstance(c_info, dict) else chat_id
+                        elif chat.get("title"):
+                            sender_name = chat.get("title")
+                        elif chat.get("first_name"):
+                            sender_name = chat.get("first_name")
                             
                         text = msg.get("text")
                         if text:
-                            self.unread_messages.append({"sender": sender_name, "chat_id": chat_id, "text": text, "time": time.strftime('%H:%M')})
+                            incoming_data = {"sender": sender_name, "chat_id": chat_id, "text": text, "time": time.strftime('%H:%M')}
+                            self.unread_messages.append(incoming_data)
                             self.save_messages()
                             self.root.after(0, self.update_unread_alarm_label)
-                            
-                            if len(self.unread_messages) >= 3:
-                                self.speak_russian(f"У вас накопилось {len(self.unread_messages)} непрочитанных сообщений, включая новые от {sender_name}.")
-                            else:
-                                self.speak_russian(f"Новое сообщение от {sender_name}.")
+                            self.speak_russian(f"Новое сообщение от {sender_name}.")
             except Exception as e:
                 print(f"Telegram polling error: {e}")
             time.sleep(2)
@@ -773,6 +832,18 @@ class AlisaApp:
     def update_unread_alarm_label(self):
         if self.display_mode == "clock" and self.unread_messages:
             self.alarm_display_label.config(text=f"💬 Новых сообщений: {len(self.unread_messages)}")
+
+    def get_formatted_messages_display(self):
+        all_msgs = list(self.unread_messages) + list(self.read_messages)
+        if not all_msgs:
+            return "Сообщений нет.", "У вас нет сообщений."
+        lines = ["--- Входящие сообщения ---"]
+        for idx, m in enumerate(all_msgs, 1):
+            status_tag = "" if m in self.unread_messages else " (прочитано)"
+            lines.append(f"{idx}. {m['sender']} ({m['time']}){status_tag}: {m['text']}")
+        unread_count = len(self.unread_messages)
+        announcement = f"У вас {unread_count} новых сообщений." if unread_count > 0 else "Показываю историю сообщений."
+        return "\n".join(lines), announcement
 
     def check_for_updates(self, manual=False):
         if not self.github_raw_url:
@@ -813,9 +884,9 @@ class AlisaApp:
         attempts = 0
         while self.is_running and attempts < 30:
             try:
-                stream = p.open(format=pyaudio.paInt16, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
-                stream.stop_stream()
-                stream.close()
+                test_stream = p.open(format=pyaudio.paInt16, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
+                test_stream.stop_stream()
+                test_stream.close()
                 break
             except Exception:
                 attempts += 1
@@ -874,13 +945,11 @@ class AlisaApp:
                         txt = json.loads(rec.Result()).get("text", "").lower()
                         if any(p_str in txt for p_str in ["алиса тревога", "алиса мне плохо"]):
                             if self.display_mode != "emergency":
-                                self.stop_all_audio()  
                                 self.last_activity_time = time.time()
                                 self.turn_screen_on()
                                 self.trigger_emergency_mode()
                             break
                         if "алиса" in txt or "alisa" in txt:
-                            self.stop_all_audio()  
                             self.last_activity_time = time.time()
                             self.turn_screen_on()
                             self.speak_russian("Слушаю.")
@@ -915,57 +984,37 @@ class AlisaApp:
                     
                     print(f"Распознано: {query}")
 
+                    # Wake screen check
+                    try:
+                        dpms_check = subprocess.run(["xset", "q"], capture_output=True, text=True)
+                        if "Monitor is Off" in dpms_check.stdout:
+                            self.turn_screen_on()
+                            time.sleep(0.5)
+                    except Exception:
+                        pass
+
                     # 1. Emergency Commands
-                    if any(w in query for w in ["отмена тревоги", "все хорошо", "всё в порядке"]):
+                    if any(phrase in query for phrase in ["отмена тревоги", "отмени тревогу", "все хорошо", "всё в порядке"]):
                         self.speak_russian("Режим тревоги отменен.")
                         global latest_emergency_message
                         latest_emergency_message = None
                         threading.Thread(target=self.send_telegram_alert, args=("✅ Тревога отменена пользователем.",), daemon=True).start()
                         self.restore_clock_mode()
                         continue
-                    elif any(w in query for w in ["тревога", "мне плохо"]):
+                    elif any(phrase in query for phrase in ["тревога", "мне плохо"]):
                         if self.display_mode != "emergency":
                             self.trigger_emergency_mode()
                         continue
 
-                    # 2. Display / Screen Mode & Hardware Power Commands
-                    if any(w in query for w in ["включи часы", "покажи часы", "часы"]):
-                        self.restore_clock_mode()
-                        self.speak_russian("Включаю часы.")
-                        continue
-                    elif any(w in query for w in ["включи свет", "свет"]) and "выключи" not in query:
-                        self.turn_light_on()
-                        self.speak_russian("Включаю свет.")
-                        continue
-                    elif any(w in query for w in ["выключи свет"]):
-                        self.turn_light_off()
-                        self.speak_russian("Выключаю свет.")
-                        continue
-                    elif any(w in query for w in ["выключить компьютер", "выключи компьютер"]):
-                        self.speak_russian("Выключаю компьютер.")
-                        time.sleep(1)
-                        subprocess.run(["sudo", "shutdown", "now"])
-                        continue
-                    elif any(w in query for w in ["выключи экран"]):
-                        self.turn_screen_off()
-                        self.speak_russian("Экран выключен.")
-                        continue
-                    elif any(w in query for w in ["включи экран"]):
-                        self.turn_screen_on()
-                        self.speak_russian("Экран включен.")
-                        continue
-
-                    # 3. Alarm Commands (Robust parsing for "будильник" and "разбуди")
-                    is_alarm_intent = ("будильник" in query) or ("разбуди" in query) or ("разбудить" in query)
-                    if is_alarm_intent and any(w in query for w in ["выключи", "отмени", "удали"]):
+                    # 2. Alarm Commands
+                    if "будильник" in query and any(w in query for w in ["выключи", "отмени", "удали", "сотри"]):
                         self.alarm_time = None
                         self.alarm_display_label.config(text="")
                         self.reminders = [item for item in self.reminders if not item.get("is_alarm")]
                         self.save_reminders()
                         self.speak_russian("Будильник выключен.")
-                        continue
-                    elif is_alarm_intent:
-                        match_a = re.search(r"(?:в\s*)?(\d{1,2})(?::(\d{2}))?\s*(?:час(?:а|ов)?)?\s*(вечера|дня|утра)?", query)
+                    elif "будильник" in query:
+                        match_a = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(?:час(?:а|ов)?)?\s*(вечера|дня|утра)?", query)
                         if match_a:
                             h = int(match_a.group(1))
                             m = int(match_a.group(2)) if match_a.group(2) else 0
@@ -982,28 +1031,105 @@ class AlisaApp:
                             if target_dt.timestamp() <= now_dt.timestamp(): target_dt += timedelta(days=1)
                             
                             self.reminders = [item for item in self.reminders if not item.get("is_alarm")]
-                            self.reminders.append({"text": f"Будильник на {self.alarm_time}", "timestamp": target_dt.timestamp(), "daily": True, "is_alarm": True, "alarm_time_str": self.alarm_time})
+                            alarm_reminder = {
+                                "text": f"Будильник на {self.alarm_time}",
+                                "timestamp": target_dt.timestamp(),
+                                "daily": True,
+                                "is_alarm": True,
+                                "alarm_time_str": self.alarm_time
+                            }
+                            self.reminders.append(alarm_reminder)
                             self.save_reminders()
                             self.speak_russian(f"Будильник установлен на {h:02d}:{m:02d}.")
                         else:
                             self.speak_russian("Не поняла время будильника.")
-                        continue
-
-                    # 4. Info Screens, Reminders & Weather
-                    if any(w in query for w in ["список команд", "команды", "справка"]):
+                    
+                    # 3. Reminders & Tasks
+                    elif "напомни" in query:
+                        match_delay = re.search(r"напомни\s+(.*?)\s+через\s+(\d+)\s*(минут|минуту|минуты|час|часа|часов)", query)
+                        if match_delay:
+                            text_reminder = match_delay.group(1).strip()
+                            amount = int(match_delay.group(2))
+                            unit = match_delay.group(3)
+                            delay_seconds = amount * 60 if "мин" in unit else amount * 3600
+                            self.add_reminder(text_reminder, delay_seconds, daily=False)
+                            self.speak_russian("Напоминание установлено.")
+                        else:
+                            match_time = re.search(r"напомни\s+(.*?)\s+(?:в|на)?\s*(\d{1,2})(?::(\d{2}))?\s*(?:час(?:а|ов)?)?\s*(вечера|дня|утра)?", query)
+                            if match_time:
+                                full_match_text = match_time.group(1).strip()
+                                hour = int(match_time.group(2))
+                                minute = int(match_time.group(3)) if match_time.group(3) else 0
+                                modifier = match_time.group(4)
+                                if modifier in ["вечера", "дня"] and hour < 12: hour += 12
+                                elif modifier == "утра" and hour == 12: hour = 0
+                                
+                                time_suffix = f" в {hour:02d}:{minute:02d}"
+                                clean_base_text = re.sub(r"\s+(?:в|на)?\s*\d{1,2}(?::\d{2})?\s*(?:час(?:а|ов)?)?\s*(?:утра|дня|вечера)?$", "", full_match_text).strip()
+                                text_reminder = clean_base_text + time_suffix
+                                
+                                now = datetime.now()
+                                target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                                if target.timestamp() <= now.timestamp(): target += timedelta(days=1)
+                                
+                                self.add_reminder(text_reminder, target.timestamp() - now.timestamp(), daily=False)
+                                self.speak_russian("Напоминание установлено.")
+                            else:
+                                self.speak_russian("Не поняла время напоминания.")
+                    
+                    # 4. Messages & Telegram
+                    elif any(w in query for w in ["пошли сообщение", "отправь сообщение", "напиши"]):
+                        remainder = re.sub(r"^(?:пошли сообщение|отправь сообщение|напиши)\s+", "", query, flags=re.IGNORECASE).strip()
+                        parts = remainder.split(maxsplit=1)
+                        if len(parts) >= 2:
+                            raw_target, msg_text = parts[0].strip().lower(), parts[1].strip()
+                            found_chat_id = None
+                            for key, details in self.contacts.items():
+                                if isinstance(details, str) and raw_target == key.lower():
+                                    found_chat_id = details
+                                    break
+                                elif isinstance(details, dict):
+                                    aliases = [a.lower() for a in details.get("aliases", [])]
+                                    if raw_target in aliases or raw_target == key.lower():
+                                        found_chat_id = key
+                                        break
+                            if found_chat_id and self.send_telegram_message_to_chat(found_chat_id, f"💬 Сообщение от Алисы:\n\n{msg_text}"):
+                                self.speak_russian("Сообщение отправлено.")
+                            else:
+                                self.speak_russian("Не удалось отправить сообщение.")
+                        else:
+                            self.speak_russian("Не поняла кому и какое сообщение отправить.")
+                    
+                    # 5. General Commands & AI Fallback
+                    elif any(w in query for w in ["список команд", "команды", "справка"]):
                         self.show_info_screen("Справочник команд", COMMAND_LIST_TEXT, "Показываю список доступных команд.")
-                        continue
                     elif "погода" in query:
                         self.show_info_screen(f"Погода ({self.city})", self.current_weather_text, f"Погода: {self.current_weather_text}")
-                        continue
-                    elif any(w in query for w in ["напоминания", "список напоминаний", "мои напоминания"]):
-                        reminders_text, speech_announcement = self.get_formatted_reminders_display()
-                        self.show_info_screen("Активные напоминания", reminders_text, speech_announcement)
-                        continue
-
-                    # 5. General AI Fallback
-                    ai_answer = self.ask_ai(query)
-                    self.speak_russian(ai_answer)
+                    elif any(w in query for w in ["напоминания", "список напоминаний"]):
+                        texts, announcement = self.get_formatted_reminders_display()
+                        self.show_info_screen("Активные напоминания", texts, announcement)
+                    elif any(w in query for w in ["включи часы", "покажи часы"]):
+                        self.restore_clock_mode()
+                        self.speak_russian("Включаю часы.")
+                    elif any(w in query for w in ["включи свет"]):
+                        self.turn_light_on()
+                        self.speak_russian("Включаю свет.")
+                    elif any(w in query for w in ["выключи свет"]):
+                        self.turn_light_off()
+                        self.speak_russian("Выключаю свет.")
+                    elif any(w in query for w in ["выключить компьютер", "выключи компьютер"]):
+                        self.shutdown_computer()
+                    elif any(w in query for w in ["выключи экран"]):
+                        self.turn_screen_off()
+                        self.speak_russian("Экран выключен.")
+                    elif any(w in query for w in ["включи экран"]):
+                        self.turn_screen_on()
+                        self.speak_russian("Экран включен.")
+                    elif "обновись" in query:
+                        self.check_for_updates(manual=True)
+                    else:
+                        ai_answer = self.ask_ai(query)
+                        self.speak_russian(ai_answer)
 
             except Exception as e:
                 print(f"Listener loop exception: {e}")
