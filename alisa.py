@@ -172,14 +172,15 @@ class AlisaApp:
     def idle_checker_loop(self):
         while self.is_running:
             time.sleep(60)
-            # Do not turn off screen if currently in emergency mode
-            if self.display_mode == "emergency":
+            # Do not turn off screen if currently in emergency mode or light mode
+            if self.display_mode in ["emergency", "light"]:
                 continue
                 
             # Check if 15 minutes (900 seconds) have passed since last voice activity
             if time.time() - self.last_activity_time >= 900:
                 try:
                     dpms_check = subprocess.run(["xset", "q"], capture_output=True, text=True)
+                    # If the monitor is currently ON, shut it down because idle time has elapsed
                     if "Monitor is On" in dpms_check.stdout:
                         self.turn_screen_off()
                 except Exception as e:
