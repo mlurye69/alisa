@@ -502,7 +502,12 @@ class AlisaApp:
             try: self.emergency_chirp_timer.cancel()
             except: pass
 
-        alert_text = f"⚠️ **ТРЕВОГА НА УМНЫХ ЧАСАХ АЛИСЫ!**\n\n🖥️ **Устройство:** `{self.device_name}`\n\nПользователь запросил помощь. Звоните 911!"
+        alert_text = (
+            f"⚠️ **ТРЕВОГА НА УМНЫХ ЧАСАХ АЛИСЫ!**\n\n"
+            f"🖥️ **Устройство:** `{self.device_name}`\n\n"
+            f"Пользователь запросил помощь. Звоните 911!\n\n"
+            f"💬 *Для отмены скажите:* `\"отмена тревоги\"`"
+        )
         latest_emergency_message = alert_text
         threading.Thread(target=self.send_telegram_alert, args=(alert_text,), daemon=True).start()
         
@@ -514,7 +519,16 @@ class AlisaApp:
         self.date_label.config(text="Режим тревоги", fg="#ff69b4", font=('Helvetica', 45, 'bold'))
         self.time_label.config(text="", font=('Helvetica', 10))
         self.alarm_display_label.config(text="")
-        self.weather_desc_label.config(text="⚠️ ВНИМАНИЕ: ТРЕВОГА! ⚠️\n\nЭкстренное уведомление отправлено близким.\n\n🚨 ЗВОНИТЕ 911", font=('Helvetica', 28, 'bold'), fg="#ff69b4")
+        
+        # Updated local screen warning text with instructions
+        local_instructions = (
+            "⚠️ ВНИМАНИЕ: ТРЕВОГА! ⚠️\n\n"
+            "Экстренное уведомление отправлено.\n"
+            "🚨 ЗВОНИТЕ 911\n\n"
+            "🗣️ Для отмены скажите:\n"
+            "\"отмена тревоги\" или \"всё в порядке\""
+        )
+        self.weather_desc_label.config(text=local_instructions, font=('Helvetica', 24, 'bold'), fg="#ff69b4")
         self.weather_temp_label.config(text="")
         self.trigger_emergency_voice_reminder(first_run=True)
 
@@ -561,6 +575,17 @@ class AlisaApp:
 
         self.alarm_display_label = tk.Label(self.frame, text="", font=('Helvetica', 24, 'bold'), fg='mediumpurple', bg='black', anchor='w')
         self.alarm_display_label.pack(anchor='w', pady=(10, 0))
+
+        self.idle_countdown_label = tk.Label(
+            self.frame, 
+            text="", 
+            font=('Helvetica', 14), 
+            fg='dim gray', 
+            bg='black', 
+            anchor='e'
+        )
+        # Position it discreetly in the top-right corner or right below the time
+        self.idle_countdown_label.place(relx=0.98, rely=0.02, anchor='ne')
 
     def turn_light_on(self):
         self.display_mode = "light"
@@ -669,6 +694,18 @@ class AlisaApp:
 
     def update_display(self):
         try:
+            # Calculate remaining idle time until screen off (900 seconds = 15 mins)
+            elapsed_idle = time.time() - self.last_activity_time
+            remaining_idle = max(0, 900 - elapsed_idle)
+            idle_mins, idle_secs = divmod(int(remaining_idle), 60)
+            
+            # Update the countdown label text if it exists
+            if hasattr(self, 'idle_countdown_label'):
+                if self.display_mode in ["clock", "info"]:
+                    self.idle_countdown_label.config(text=f"💤 {idle_mins:02d}:{idle_secs:02d}")
+                else:
+                    self.idle_countdown_label.config(text="")
+
             if self.display_mode == "clock":
                 days_ru = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
                 months_ru = ["", "Января", "Февраля", "Марта", "Апреля", "Мая", "Июня", "Июля", "Августа", "Сентября", "Октября", "Ноября", "Декабря"]
@@ -765,8 +802,16 @@ class AlisaApp:
     def turn_screen_off(self):
         try:
             env = os.environ.copy()
-            if ":0" not in env.get("DISPLAY", ""): env["DISPLAY"] = ":0"
-            subprocess.Popen(["xset", "dpms", "force", "off"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if "DISPLAY" not in env:
+                env["DISPLAY"] = ":0.0"
+            if "XAUTHORITY" not in env:
+                # Fallback to standard user xauth path if not set
+                xauth_path = os.path.expanduser(f"~/.Xauthority")
+                if os.path.exists(xauth_path):
+                    env["XAUTHORITY"] = xauth_path
+                    
+            subprocess.run(["xset", "dpms", "force", "off"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print("Экран выключен по таймеру бездействия.")
         except Exception as e:
             print(f"Screen off error: {e}")
 
