@@ -172,6 +172,11 @@ class AlisaApp:
     def idle_checker_loop(self):
         while self.is_running:
             time.sleep(60)
+            # Do not turn off screen if currently in emergency mode
+            if self.display_mode == "emergency":
+                continue
+                
+            # Check if 15 minutes (900 seconds) have passed since last voice activity
             if time.time() - self.last_activity_time >= 900:
                 try:
                     dpms_check = subprocess.run(["xset", "q"], capture_output=True, text=True)
@@ -1008,7 +1013,8 @@ class AlisaApp:
                         pass
 
                     # 1. Emergency Commands
-                    if any(phrase in query for phrase in ["отмена тревоги", "отмени тревогу", "все хорошо", "всё в порядке"]):
+                    elif any(phrase in query for phrase in ["отмена тревоги", "отмени тревогу", "все хорошо", "всё в порядке"]):
+                        self.last_activity_time = time.time()  # Reset idle timer on interaction
                         self.speak_russian("Режим тревоги отменен.")
                         global latest_emergency_message
                         latest_emergency_message = None
@@ -1016,6 +1022,7 @@ class AlisaApp:
                         self.restore_clock_mode()
                         continue
                     elif any(phrase in query for phrase in ["тревога", "мне плохо"]):
+                        self.last_activity_time = time.time()  # Reset idle timer on interaction
                         if self.display_mode != "emergency":
                             self.trigger_emergency_mode()
                         continue
