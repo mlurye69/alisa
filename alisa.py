@@ -1045,8 +1045,9 @@ class AlisaApp:
                             self.speak_russian("Не поняла время будильника.")
                     
                     # 3. Reminders & Tasks
-                    elif "напомни" in query:
-                        match_delay = re.search(r"напомни\s+(.*?)\s+через\s+(\d+)\s*(минут|минуту|минуты|час|часа|часов)", query)
+                    elif any(w in query for w in ["напомни", "напоминание"]):
+                        # Match delay format (e.g. "напомни взять таблетки через 5 минут" or "добавь напоминание взять таблетки через 5 минут")
+                        match_delay = re.search(r"(?:напомни|напоминание|добавь\s+напоминание|установи\s+напоминание)\s+(.*?)\s+через\s+(\d+)\s*(минут|минуту|минуты|час|часа|часов)", query)
                         if match_delay:
                             text_reminder = match_delay.group(1).strip()
                             amount = int(match_delay.group(2))
