@@ -1061,21 +1061,57 @@ class AlisaApp:
                                 hour = int(match_time.group(2))
                                 minute = int(match_time.group(3)) if match_time.group(3) else 0
                                 modifier = match_time.group(4)
-                                if modifier in ["вечера", "дня"] and hour < 12: hour += 12
-                                elif modifier == "утра" and hour == 12: hour = 0
                                 
+                                if modifier in ["вечера", "дня"] and hour < 12:
+                                    hour += 12
+                                elif modifier == "утра" and hour == 12:
+                                    hour = 0
+                                    
                                 time_suffix = f" в {hour:02d}:{minute:02d}"
                                 clean_base_text = re.sub(r"\s+(?:в|на)?\s*\d{1,2}(?::\d{2})?\s*(?:час(?:а|ов)?)?\s*(?:утра|дня|вечера)?$", "", full_match_text).strip()
                                 text_reminder = clean_base_text + time_suffix
                                 
                                 now = datetime.now()
                                 target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                                if target.timestamp() <= now.timestamp(): target += timedelta(days=1)
-                                
-                                self.add_reminder(text_reminder, target.timestamp() - now.timestamp(), daily=False)
+                                if target.timestamp() <= now.timestamp():
+                                    target += timedelta(days=1)
+                                    
+                                delay_seconds = target.timestamp() - now.timestamp()
+                                self.add_reminder(text_reminder, delay_seconds, daily=False)
                                 self.speak_russian("Напоминание установлено.")
                             else:
                                 self.speak_russian("Не поняла время напоминания.")
+                    elif any(w in query for w in ["ежедневное", "каждый день", "ежедневно"]):
+                        try:
+                            match_daily = re.search(r"(?:ежедневное\s+напоминание|напоминание|ежедневное|каждый\s+день|ежедневно)\s+(.+?)\s+(?:в|на)?\s*(\d{1,2})(?::(\d{2}))?\s*(?:час(?:а|ов)?)?\s*(вечера|дня|утра)?", query)
+                            if match_daily:
+                                full_match_text = match_daily.group(1).strip()
+                                hour = int(match_daily.group(2))
+                                minute = int(match_daily.group(3)) if match_daily.group(3) else 0
+                                modifier = match_daily.group(4)
+                                
+                                if modifier in ["вечера", "дня"] and hour < 12:
+                                    hour += 12
+                                elif modifier == "утра" and hour == 12:
+                                    hour = 0
+
+                                time_suffix = f" в {hour:02d}:{minute:02d}"
+                                clean_base_text = re.sub(r"\s+(?:в|на)?\s*\d{1,2}(?::\d{2})?\s*(?:час(?:а|ов)?)?\s*(?:утра|дня|вечера)?$", "", full_match_text).strip()
+                                text_reminder = clean_base_text + time_suffix
+                                
+                                now = datetime.now()
+                                target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                                if target.timestamp() <= now.timestamp():
+                                    target += timedelta(days=1)
+                                    
+                                delay_seconds = target.timestamp() - now.timestamp()
+                                self.add_reminder(text_reminder, delay_seconds, daily=True)
+                                self.speak_russian("Ежедневное напоминание установлено.")
+                            else:
+                                self.speak_russian("Не поняла текст или время ежедневного напоминания.")
+                        except Exception as ex:
+                            print(f"ОШИБКА в блоке ежедневных напоминаний: {ex}")
+                            self.speak_russian("Произошла ошибка при установке напоминания.")
                     
                     # 4. Messages & Telegram
                     elif any(w in query for w in ["пошли сообщение", "отправь сообщение", "отправь меседж", "пошли смс", "напиши"]):
@@ -1268,12 +1304,45 @@ class AlisaApp:
                             while self.unread_messages:
                                 self.read_messages.append(self.unread_messages.pop(0))
                             self.save_messages()
-                    
+                    elif any(w in query for w in ["удали", "сотри", "убери"]) and any(w in query for w in ["напоминание", "напоминания"]):
+                        number_words = {
+                            "один": 1, "одну": 1, "первое": 1, "первый": 1,
+                            "два": 2, "две": 2, "второе": 2, "второй": 2,
+                            "три": 3, "третье": 3, "третий": 3,
+                            "четыре": 4, "четвертое": 4, "четвертый": 4,
+                            "пять": 5, "пятое": 5, "пятый": 5,
+                            "шесть": 6, "шестое": 6, "шестой": 6,
+                            "семь": 7, "седьмое": 7, "седьмой": 7,
+                            "восемь": 8, "восьмое": 8, "восьмой": 8,
+                            "девять": 9, "девятое": 9, "девятый": 9,
+                            "десять": 10, "десятое": 10, "десятый": 10
+                        }
+                        
+                        rem_num = None
+                        match_num = re.search(r"(?:удали|удалить|сотри|убери)\s+(?:напоминание\s+)?(?:номер\s+)?(\d+)", query)
+                        if match_num:
+                            rem_num = int(match_num.group(1))
+                        else:
+                            for word, val in number_words.items():
+                                if word in query:
+                                    rem_num = val
+                                    break
+                                    
+                        if rem_num:
+                            self.remove_reminder_by_index(rem_num)
+                        else:
+                            self.speak_russian("Укажите номер напоминания для удаления.")
+
                     # 5. General Commands & AI Fallback
                     elif any(w in query for w in ["список команд", "команды", "справка"]):
                         self.show_info_screen("Справочник команд", COMMAND_LIST_TEXT, "Показываю список доступных команд.")
-                    elif "погода" in query:
-                        self.show_info_screen(f"Погода ({self.city})", self.current_weather_text, f"Погода: {self.current_weather_text}")
+                    elif any(w in query for w in ["погода", "погоды", "прогноз"]):
+                        if "завтра" in query:
+                            self.show_info_screen("Прогноз на завтра", self.tomorrow_hourly_forecast, "Показываю прогноз на завтра.")
+                        elif "неделя" in query or "неделю" in query:
+                            self.show_info_screen("Прогноз на неделю", self.weekly_forecast_text, "Прогноз на неделю.")
+                        else:
+                            self.show_info_screen(f"Погода ({self.city})", self.current_weather_text, f"Погода в городе {self.city}: {self.current_weather_text}")
                     elif any(w in query for w in ["напоминания", "список напоминаний"]):
                         texts, announcement = self.get_formatted_reminders_display()
                         self.show_info_screen("Активные напоминания", texts, announcement)
