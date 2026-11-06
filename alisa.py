@@ -579,13 +579,13 @@ class AlisaApp:
         self.idle_countdown_label = tk.Label(
             self.frame, 
             text="", 
-            font=('Helvetica', 14), 
+            font=('Helvetica', 14, 'bold'), 
             fg='dim gray', 
             bg='black', 
             anchor='e'
         )
-        # Position it discreetly in the top-right corner or right below the time
-        self.idle_countdown_label.place(relx=0.98, rely=0.02, anchor='ne')
+        # Anchor to bottom-right (rely=0.98, relx=0.98 with anchor='se')
+        self.idle_countdown_label.place(relx=0.98, rely=0.98, anchor='se')
 
     def turn_light_on(self):
         self.display_mode = "light"
