@@ -1320,12 +1320,15 @@ class AlisaApp:
                         }
                         
                         rem_num = None
+                        # 1. Try finding numeric digits first
                         match_num = re.search(r"(?:удали|удалить|сотри|убери)\s+(?:напоминание\s+)?(?:номер\s+)?(\d+)", query)
                         if match_num:
                             rem_num = int(match_num.group(1))
                         else:
+                            # 2. Check for written number words using word boundaries or exact checks
+                            words_in_query = query.split()
                             for word, val in number_words.items():
-                                if word in query:
+                                if word in words_in_query:
                                     rem_num = val
                                     break
                                     
