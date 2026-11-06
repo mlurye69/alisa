@@ -1086,6 +1086,42 @@ class AlisaApp:
                         else:
                             self.speak_russian("Укажите номер напоминания для удаления.")
 
+                    elif any(w in query for w in ["ежедневное", "каждый день", "ежедневно"]) and any(w in query for w in ["напоминание", "напоминания"]):
+                        try:
+                            # Replace your match_daily definition with this robust version:
+                            match_daily = re.search(
+                                r"(?:добавь\s+ежедневное\s+напоминание|установи\s+ежедневное\s+напоминание|ежедневное\s+напоминание|каждый\s+день|ежедневно)\s+(.+?)\s+(?:в|на)\s*(\d{1,2}):(\d{2})\s*(утра|дня|вечера)?", 
+                                query
+                            )
+                            if match_daily:
+                                full_match_text = match_daily.group(1).strip()
+                                hour = int(match_daily.group(2))
+                                minute = int(match_daily.group(3)) if match_daily.group(3) else 0
+                                modifier = match_daily.group(4)
+                                
+                                if modifier in ["вечера", "дня"] and hour < 12:
+                                    hour += 12
+                                elif modifier == "утра" and hour == 12:
+                                    hour = 0
+
+                                time_suffix = f" в {hour:02d}:{minute:02d}"
+                                clean_base_text = re.sub(r"\s+(?:в|на)?\s*\d{1,2}(?::\d{2})?\s*(?:час(?:а|ов)?)?\s*(?:утра|дня|вечера)?$", "", full_match_text).strip()
+                                text_reminder = clean_base_text + time_suffix
+                                
+                                now = datetime.now()
+                                target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                                if target.timestamp() <= now.timestamp():
+                                    target += timedelta(days=1)
+                                    
+                                delay_seconds = target.timestamp() - now.timestamp()
+                                self.add_reminder(text_reminder, delay_seconds, daily=True)
+                                self.speak_russian("Ежедневное напоминание установлено.")
+                            else:
+                                self.speak_russian("Не поняла текст или время ежедневного напоминания.")
+                        except Exception as ex:
+                            print(f"ОШИБКА в блоке ежедневных напоминаний: {ex}")
+                            self.speak_russian("Произошла ошибка при установке напоминания.")
+
                     # 4. Reminders & Tasks Creation (CHECK THIS SECOND)
                     elif any(w in query for w in ["напомни", "напоминание"]):
                         # Match delay format (e.g. "напомни взять таблетки через 5 минут" or "добавь напоминание взять таблетки через 5 минут")
@@ -1124,41 +1160,6 @@ class AlisaApp:
                                 self.speak_russian("Напоминание установлено.")
                             else:
                                 self.speak_russian("Не поняла время напоминания.")
-                    elif any(w in query for w in ["ежедневное", "каждый день", "ежедневно"]):
-                        try:
-                            # Replace your match_daily definition with this robust version:
-                            match_daily = re.search(
-                                r"(?:добавь\s+ежедневное\s+напоминание|установи\s+ежедневное\s+напоминание|ежедневное\s+напоминание|каждый\s+день|ежедневно)\s+(.+?)\s+(?:в|на)\s*(\d{1,2}):(\d{2})\s*(утра|дня|вечера)?", 
-                                query
-                            )
-                            if match_daily:
-                                full_match_text = match_daily.group(1).strip()
-                                hour = int(match_daily.group(2))
-                                minute = int(match_daily.group(3)) if match_daily.group(3) else 0
-                                modifier = match_daily.group(4)
-                                
-                                if modifier in ["вечера", "дня"] and hour < 12:
-                                    hour += 12
-                                elif modifier == "утра" and hour == 12:
-                                    hour = 0
-
-                                time_suffix = f" в {hour:02d}:{minute:02d}"
-                                clean_base_text = re.sub(r"\s+(?:в|на)?\s*\d{1,2}(?::\d{2})?\s*(?:час(?:а|ов)?)?\s*(?:утра|дня|вечера)?$", "", full_match_text).strip()
-                                text_reminder = clean_base_text + time_suffix
-                                
-                                now = datetime.now()
-                                target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                                if target.timestamp() <= now.timestamp():
-                                    target += timedelta(days=1)
-                                    
-                                delay_seconds = target.timestamp() - now.timestamp()
-                                self.add_reminder(text_reminder, delay_seconds, daily=True)
-                                self.speak_russian("Ежедневное напоминание установлено.")
-                            else:
-                                self.speak_russian("Не поняла текст или время ежедневного напоминания.")
-                        except Exception as ex:
-                            print(f"ОШИБКА в блоке ежедневных напоминаний: {ex}")
-                            self.speak_russian("Произошла ошибка при установке напоминания.")
                     
                     # 4. Messages & Telegram
                     elif any(w in query for w in ["пошли сообщение", "отправь сообщение", "отправь меседж", "пошли смс", "напиши"]):
