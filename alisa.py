@@ -1025,15 +1025,6 @@ class AlisaApp:
                                 self.trigger_emergency_mode()
                             break
 
-                        if any(phrase in query for phrase in ["алиса отмена тревоги", "алиса отмени тревогу", "алиса все хорошо", "алиса всё в порядке"]):
-                            self.last_activity_time = time.time()  # Reset idle timer on interaction
-                            self.speak_russian("Режим тревоги отменен.")
-                            global latest_emergency_message
-                            latest_emergency_message = None
-                            threading.Thread(target=self.send_telegram_alert, args=("✅ Тревога отменена пользователем.",), daemon=True).start()
-                            self.restore_clock_mode()
-                            break
-
                         if "алиса" in txt or "alisa" in txt:
                             self.last_activity_time = time.time()
                             self.turn_screen_on()
