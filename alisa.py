@@ -707,6 +707,15 @@ class AlisaApp:
                 else:
                     self.idle_countdown_label.config(text="")
 
+            # TRIGGER SCREEN OFF IMMEDIATELY WHEN TIMER HITS ZERO
+            if remaining_idle <= 0 and self.display_mode not in ["emergency", "light"]:
+                try:
+                    dpms_check = subprocess.run(["xset", "q"], capture_output=True, text=True)
+                    if "Monitor is On" in dpms_check.stdout:
+                        self.turn_screen_off()
+                except Exception as e:
+                    print(f"Immediate screen off error: {e}")
+
             if self.display_mode == "clock":
                 days_ru = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
                 months_ru = ["", "Января", "Февраля", "Марта", "Апреля", "Мая", "Июня", "Июля", "Августа", "Сентября", "Октября", "Ноября", "Декабря"]
