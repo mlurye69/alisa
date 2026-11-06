@@ -1187,8 +1187,6 @@ class AlisaApp:
                                     match_found = True
                                 if target_contact_name and target_contact_name.lower() in sender_str:
                                     match_found = True
-                                if any(sub in sender_str for sub in ["mish", "mike"]) and target_contact_name:
-                                    match_found = True
                                     
                                 if match_found:
                                     contact_msgs.append(m)
