@@ -1078,27 +1078,198 @@ class AlisaApp:
                                 self.speak_russian("Не поняла время напоминания.")
                     
                     # 4. Messages & Telegram
-                    elif any(w in query for w in ["пошли сообщение", "отправь сообщение", "напиши"]):
-                        remainder = re.sub(r"^(?:пошли сообщение|отправь сообщение|напиши)\s+", "", query, flags=re.IGNORECASE).strip()
+                    elif any(w in query for w in ["пошли сообщение", "отправь сообщение", "отправь меседж", "пошли смс", "напиши"]):
+                        remainder = re.sub(r"^(?:пошли сообщение|отправь сообщение|отправь меседж|пошли смс|напиши)\s+", "", query, flags=re.IGNORECASE).strip()
                         parts = remainder.split(maxsplit=1)
+                        
                         if len(parts) >= 2:
-                            raw_target, msg_text = parts[0].strip().lower(), parts[1].strip()
+                            raw_target = parts[0].strip().lower()
+                            msg_text = parts[1].strip()
+                            
                             found_chat_id = None
                             for key, details in self.contacts.items():
-                                if isinstance(details, str) and raw_target == key.lower():
-                                    found_chat_id = details
-                                    break
+                                if isinstance(details, str):
+                                    aliases = [key.lower()]
+                                    actual_chat_id = details
+                                    if raw_target in aliases or raw_target == key.lower():
+                                        found_chat_id = actual_chat_id
+                                        break
                                 elif isinstance(details, dict):
                                     aliases = [a.lower() for a in details.get("aliases", [])]
-                                    if raw_target in aliases or raw_target == key.lower():
-                                        found_chat_id = key
+                                    actual_chat_id = key
+                                    if raw_target in aliases:
+                                        found_chat_id = actual_chat_id
                                         break
-                            if found_chat_id and self.send_telegram_message_to_chat(found_chat_id, f"💬 Сообщение от Алисы:\n\n{msg_text}"):
-                                self.speak_russian("Сообщение отправлено.")
+                            
+                            if found_chat_id:
+                                success = self.send_telegram_message_to_chat(found_chat_id, f"💬 Сообщение от Алисы:\n\n{msg_text}")
+                                if success:
+                                    self.speak_russian("Сообщение отправлено.")
+                                else:
+                                    self.speak_russian("Не удалось отправить сообщение.")
                             else:
-                                self.speak_russian("Не удалось отправить сообщение.")
+                                self.speak_russian(f"Не нашла контакт {raw_target}.")
                         else:
                             self.speak_russian("Не поняла кому и какое сообщение отправить.")
+                    elif any(w in query for w in ["покажи", "прочитай", "прочти", "последнее", "последние"]) and any(w in query for w in ["сообщен", "меседж", "сообщения", "сообщение", "сообчени"]):
+                        # --- GENERIC CONFIG-DRIVEN MESSAGE & CONTACT HANDLER ---
+                        target_contact_name = None
+                        target_chat_ids = []
+                        is_read_command = any(w in query for w in ["прочитай", "прочти"])
+                        
+                        # 1. Dynamically scan self.contacts for any matching alias or name mentioned in query
+                        for contact_key, details in self.contacts.items():
+                            contact_aliases = [str(contact_key).lower()]
+                            resolved_name = str(contact_key)
+                            chat_id_candidates = [str(contact_key)]
+                            
+                            if isinstance(details, dict):
+                                resolved_name = details.get("name", str(contact_key))
+                                if "aliases" in details and isinstance(details["aliases"], list):
+                                    contact_aliases.extend([str(a).lower() for a in details["aliases"]])
+                                if details.get("CHANNEL_ID"):
+                                    chat_id_candidates.append(str(details.get("CHANNEL_ID")))
+                                if details.get("chat_id"):
+                                    chat_id_candidates.append(str(details.get("chat_id")))
+                            elif isinstance(details, str):
+                                chat_id_candidates.append(str(details))
+
+                            matched = False
+                            for alias in contact_aliases:
+                                stem = alias[:-1] if alias.endswith(('а', 'я', 'е', 'у', 'ы', 'о')) else alias
+                                if alias in query or (len(stem) > 2 and stem in query):
+                                    matched = True
+                                    break
+                            
+                            if resolved_name.lower() in query or resolved_name.lower()[:-1] in query:
+                                matched = True
+
+                            if matched or ("от" in query and resolved_name.lower() in query):
+                                target_contact_name = resolved_name
+                                target_chat_ids = chat_id_candidates
+                                break
+
+                        # 2. Fallback check if name follows "от"
+                        if not target_contact_name and "от" in query:
+                            parts_q = query.split("от")
+                            if len(parts_q) > 1:
+                                potential_name = parts_q[1].strip().split()[0].lower()
+                                for contact_key, details in self.contacts.items():
+                                    r_name = details.get("name", "").lower() if isinstance(details, dict) else str(contact_key).lower()
+                                    if potential_name in r_name or potential_name in str(contact_key).lower():
+                                        target_contact_name = details.get("name") if isinstance(details, dict) else str(contact_key)
+                                        if isinstance(details, dict):
+                                            if details.get("CHANNEL_ID"): chat_id_candidates.append(str(details.get("CHANNEL_ID")))
+                                            if details.get("chat_id"): chat_id_candidates.append(str(details.get("chat_id")))
+                                        break
+                                if not target_contact_name:
+                                    target_contact_name = potential_name.capitalize()
+
+                        all_known = list(self.unread_messages) + list(self.read_messages)
+                        
+                        if target_contact_name or target_chat_ids:
+                            # --- BRANCH A: Specific Contact Messages ---
+                            contact_msgs = []
+                            matched_chat_ids = set(target_chat_ids)
+                            
+                            for ck, cd in self.contacts.items():
+                                if isinstance(cd, dict):
+                                    for k_sub in ["CHANNEL_ID", "chat_id"]:
+                                        if cd.get(k_sub):
+                                            matched_chat_ids.add(str(cd.get(k_sub)))
+
+                            for m in all_known:
+                                m_chat_id = str(m.get("chat_id", ""))
+                                sender_str = str(m.get("sender", "")).lower()
+                                
+                                match_found = False
+                                if m_chat_id in matched_chat_ids:
+                                    match_found = True
+                                if target_contact_name and target_contact_name.lower() in sender_str:
+                                    match_found = True
+                                if any(sub in sender_str for sub in ["mish", "mike"]) and target_contact_name:
+                                    match_found = True
+                                    
+                                if match_found:
+                                    contact_msgs.append(m)
+
+                            if not contact_msgs and target_chat_ids:
+                                contact_msgs = self.fetch_telegram_channel_history(target_chat_ids[-1], limit=10)
+
+                            if contact_msgs:
+                                target_msgs = contact_msgs[-10:] if len(contact_msgs) >= 10 else contact_msgs
+                                
+                                lines = [f"--- Сообщения от {target_contact_name or 'контакта'} ---"]
+                                
+                                # Track which of these displayed messages are currently unread
+                                unread_texts_in_target = {m.get("text") for m in self.unread_messages}
+                                newly_read_spoken_parts = []
+
+                                for idx, m in enumerate(target_msgs, 1):
+                                    is_unread_item = m.get("text") in unread_texts_in_target or m in self.unread_messages
+                                    status_tag = "" if not is_unread_item else " (новое)"
+                                    lines.append(f"{idx}. ({m['time']}){status_tag}: {m['text']}")
+                                    
+                                    if is_read_command and is_unread_item:
+                                        newly_read_spoken_parts.append(f"От {m['sender']}: {m['text']}")
+
+                                # Mark viewed messages as read and save
+                                viewed_texts = {m.get("text") for m in target_msgs}
+                                remaining_unread = []
+                                for m in self.unread_messages:
+                                    if m.get("text") in viewed_texts or str(m.get("chat_id")) in matched_chat_ids:
+                                        self.read_messages.append(m)
+                                    else:
+                                        remaining_unread.append(m)
+                                self.unread_messages = remaining_unread
+                                self.save_messages()
+                                
+                                if self.display_mode == "clock":
+                                    if self.unread_messages:
+                                        self.alarm_display_label.config(text=f"💬 Новых сообщений: {len(self.unread_messages)}")
+                                    elif self.alarm_time:
+                                        self.alarm_display_label.config(text=f"⏰ Будильник: {self.alarm_time}")
+                                    else:
+                                        self.alarm_display_label.config(text="")
+
+                                disp_name = target_contact_name or "контакта"
+                                self.show_info_screen(f"Сообщения: {disp_name}", "\n".join(lines), "")
+                                
+                                # Speak ONLY if explicitly asked to read AND there are unread messages from this contact
+                                if is_read_command:
+                                    if newly_read_spoken_parts:
+                                        self.speak_russian(". ".join(newly_read_spoken_parts))
+                                    else:
+                                        self.speak_russian("Новых непрочитанных сообщений от этого контакта нет.")
+                            else:
+                                self.speak_russian(f"Нет сохраненных сообщений от этого контакта.")
+                        
+                        elif "покажи" in query or "последнее" in query or "последние" in query:
+                            # --- BRANCH B: General display screen (Silent) ---
+                            texts, _ = self.get_formatted_messages_display()
+                            self.show_info_screen("Все сообщения", texts, "")
+                        
+                        else:
+                            # --- BRANCH C: Read unread messages aloud ---
+                            if not self.unread_messages:
+                                self.speak_russian("У вас нет новых входящих сообщений.")
+                            else:
+                                target_read = list(self.unread_messages)
+                                read_summary_parts = []
+                                for m in target_read:
+                                    read_summary_parts.append(f"От {m['sender']}: {m['text']}")
+                                
+                                self.speak_russian(". ".join(read_summary_parts))
+                                
+                                if self.display_mode == "clock":
+                                    if self.alarm_time:
+                                        self.alarm_display_label.config(text=f"⏰ Будильник: {self.alarm_time}")
+                                    else:
+                                        self.alarm_display_label.config(text="")
+
+                            while self.unread_messages:
+                                self.read_messages.append(self.unread_messages.pop(0))
+                            self.save_messages()
                     
                     # 5. General Commands & AI Fallback
                     elif any(w in query for w in ["список команд", "команды", "справка"]):
