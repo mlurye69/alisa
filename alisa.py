@@ -963,6 +963,20 @@ class AlisaApp:
         if self.groq_api_key == "gsk_YOUR_GROQ_API_KEY_HERE":
             return "Пожалуйста, настройте API ключ Groq в коде."
         try:
+            # --- Dynamic Context Injection for Fallback Queries ---
+            days_ru = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+            months_ru = ["", "января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
+            t = time.localtime()
+            current_date_str = f"{days_ru[t.tm_wday]}, {t.tm_mday} {months_ru[t.tm_mon]} {t.tm_year} года"
+            
+            system_prompt = (
+                f"Ты голосовой ассистент на умных часах. "
+                f"Текущая дата и день недели: {current_date_str}. "
+                f"Текущий город пользователя (откуда считаются расстояния или погода, если не указано иное): {self.city}. "
+                f"Отвечай кратко, по делу, исключительно на русском языке, максимум в 1-2 предложениях."
+            )
+            # ----------------------------------------------------
+
             # Append the new user prompt to history
             self.conversation_history.append({"role": "user", "content": prompt})
             
@@ -970,9 +984,9 @@ class AlisaApp:
             if len(self.conversation_history) > 20:
                 self.conversation_history = self.conversation_history[-20:]
 
-            # Build the full payload with system prompt + history
+            # Build the full payload with dynamic system prompt + history
             messages_payload = [
-                {"role": "system", "content": "Ты голосовой ассистент на умных часах. Отвечай кратко, по делу, исключительно на русском языке, максимум в 1-2 предложениях."}
+                {"role": "system", "content": system_prompt}
             ] + self.conversation_history
 
             response = requests.post(
