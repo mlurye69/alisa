@@ -1343,6 +1343,24 @@ class AlisaApp:
                             self.show_info_screen("Прогноз на неделю", self.weekly_forecast_text, "Прогноз на неделю.")
                         else:
                             self.show_info_screen(f"Погода ({self.city})", self.current_weather_text, f"Погода в городе {self.city}: {self.current_weather_text}")
+                    elif "который час" in query or any(w in query for w in ["сколько","сейчас"]) and any(w in query for w in ["времени","время"]):
+                        current_time_str = time.strftime('%H:%M')
+                        self.speak_russian(f"Сейчас {current_time_str}")
+                    
+                    # --- NEW: Day of week query ---
+                    elif any(w in query for w in ["день недели", "какой сегодня день"]) or ("какой" in query and "день" in query):
+                        days_ru = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+                        t = time.localtime()
+                        current_day_name = days_ru[t.tm_wday]
+                        self.speak_russian(f"Сегодня {current_day_name.lower()}")
+                    
+                    # --- NEW: Date query ---
+                    elif any(w in query for w in ["какое сегодня число", "сегодня какое число", "какая дата", "сегодняшняя дата"]):
+                        days_ru = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+                        months_ru = ["", "января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
+                        t = time.localtime()
+                        date_speech = f"Сегодня {days_ru[t.tm_wday]}, {t.tm_mday} {months_ru[t.tm_mon]} {t.tm_year} года"
+                        self.speak_russian(date_speech)
                     elif any(w in query for w in ["напоминания", "список напоминаний"]):
                         texts, announcement = self.get_formatted_reminders_display()
                         self.show_info_screen("Активные напоминания", texts, announcement)
