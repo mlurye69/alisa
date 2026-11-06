@@ -1126,10 +1126,11 @@ class AlisaApp:
                                 self.speak_russian("Не поняла время напоминания.")
                     elif any(w in query for w in ["ежедневное", "каждый день", "ежедневно"]):
                         try:
+                            # Replace your match_daily definition with this robust version:
                             match_daily = re.search(
-                                r"(?:добавь\s+ежедневное\s+напоминание|установи\s+ежедневное\s+напоминание|ежедневное\s+напоминание|каждый\s+день|ежедневно)\s+(.+?)\s+(?:в|на)?\s*(\d{1,2})(?::(\d{2}))?\s*(?:час(?:а|ов)?)?\s*(вечера|дня|утра)?", 
+                                r"(?:добавь\s+ежедневное\s+напоминание|установи\s+ежедневное\s+напоминание|ежедневное\s+напоминание|каждый\s+день|ежедневно)\s+(.+?)\s+(?:в|на)\s*(\d{1,2}):(\d{2})\s*(утра|дня|вечера)?", 
                                 query
-)
+                            )
                             if match_daily:
                                 full_match_text = match_daily.group(1).strip()
                                 hour = int(match_daily.group(2))
