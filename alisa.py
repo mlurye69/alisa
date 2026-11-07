@@ -630,7 +630,7 @@ class AlisaApp:
         try:
             import re
             
-            # 1. Detect if input is Russian or English, and translate accordingly
+            # 1. Detect if input is Russian or English
             is_russian = bool(re.search(r'[а-яА-ЯёЁ]', text_to_translate))
             
             if is_russian:
@@ -667,47 +667,61 @@ class AlisaApp:
                 self.speak_russian("Не удалось перевести фразу.")
                 return
 
-            # Determine source, English, and phonetic output based on direction
+            # 2. Assign variables and labels based on direction
             if is_russian:
-                russian_text = text_to_translate
-                english_text = translated_text
+                source_label = "🇷🇺 Исходный текст (Russian)"
+                source_text = text_to_translate
+                target_label = "🇬🇧 Перевод (English)"
+                target_text = translated_text
+                
+                # Phonetic transliteration for English result
+                def phonetic_translit(text):
+                    t = text.lower()
+                    t = re.sub(r'[^\w\s]', '', t)
+                    replacements = [
+                        ('tion', 'шн'), ('sion', 'шн'), ('igh', 'ай'), ('ough', 'оф'),
+                        ('wh', 'у'), ('sh', 'ш'), ('ch', 'ч'), ('zh', 'ж'), ('th', 'с'),
+                        ('ph', 'ф'), ('oo', 'у'), ('ee', 'и'), ('ea', 'и'), ('ai', 'эй'),
+                        ('ay', 'эй'), ('oa', 'оу'), ('ou', 'ау'), ('ow', 'ау'), ('ew', 'ью'),
+                        ('ck', 'к'), ('qu', 'кв'), ('wr', 'р'), ('kn', 'н'), ('gh', ''),
+                        ('a', 'э'), ('b', 'б'), ('c', 'к'), ('d', 'д'), ('e', 'э'),
+                        ('f', 'ф'), ('g', 'г'), ('h', 'х'), ('i', 'и'), ('j', 'дж'),
+                        ('k', 'к'), ('l', 'л'), ('m', 'м'), ('n', 'н'), ('o', 'о'),
+                        ('p', 'п'), ('q', 'к'), ('r', 'р'), ('s', 'с'), ('t', 'т'),
+                        ('u', 'а'), ('v', 'в'), ('w', 'у'), ('x', 'кс'), ('y', 'и'), ('z', 'з')
+                    ]
+                    for src, dst in replacements:
+                        t = t.replace(src, dst)
+                    t = re.sub(r'(.)\1+', r'\1', t)
+                    return t.capitalize()
+
+                cyrillic_translit = phonetic_translit(target_text)
+                
+                # Format display for Russian -> English
+                display_body = (
+                    f"{source_label}:\n{source_text}\n\n"
+                    f"{target_label}:\n{target_text}\n\n"
+                    f"🔤 Произношение русскими буквами:\n\"{cyrillic_translit}\""
+                )
+                # Speak English text aloud
+                self.speak_russian(target_text, lang='en')
+
             else:
-                english_text = text_to_translate
-                russian_text = translated_text
+                source_label = "🇬🇧 Исходный текст (English)"
+                source_text = text_to_translate
+                target_label = "🇷🇺 Перевод (Russian)"
+                target_text = translated_text
+                
+                # Format display for English -> Russian (no transliteration needed)
+                display_body = (
+                    f"{source_label}:\n{source_text}\n\n"
+                    f"{target_label}:\n{target_text}"
+                )
+                # Speak Russian text aloud
+                self.speak_russian(target_text, lang='ru')
 
-            # 2. Phonetic Russian Transliteration for the English text
-            def phonetic_translit(text):
-                t = text.lower()
-                t = re.sub(r'[^\w\s]', '', t)
-                replacements = [
-                    ('tion', 'шн'), ('sion', 'шн'), ('igh', 'ай'), ('ough', 'оф'),
-                    ('wh', 'у'), ('sh', 'ш'), ('ch', 'ч'), ('zh', 'ж'), ('th', 'с'),
-                    ('ph', 'ф'), ('oo', 'у'), ('ee', 'и'), ('ea', 'и'), ('ai', 'эй'),
-                    ('ay', 'эй'), ('oa', 'оу'), ('ou', 'ау'), ('ow', 'ау'), ('ew', 'ью'),
-                    ('ck', 'к'), ('qu', 'кв'), ('wr', 'р'), ('kn', 'н'), ('gh', ''),
-                    ('a', 'э'), ('b', 'б'), ('c', 'к'), ('d', 'д'), ('e', 'э'),
-                    ('f', 'ф'), ('g', 'г'), ('h', 'х'), ('i', 'и'), ('j', 'дж'),
-                    ('k', 'к'), ('l', 'л'), ('m', 'м'), ('n', 'н'), ('o', 'о'),
-                    ('p', 'п'), ('q', 'к'), ('r', 'р'), ('s', 'с'), ('t', 'т'),
-                    ('u', 'а'), ('v', 'в'), ('w', 'у'), ('x', 'кс'), ('y', 'и'), ('z', 'з')
-                ]
-                for src, dst in replacements:
-                    t = t.replace(src, dst)
-                t = re.sub(r'(.)\1+', r'\1', t)
-                return t.capitalize()
-
-            cyrillic_translit = phonetic_translit(english_text)
-
-            # 3. Format display text with properly aligned labels for both directions
-            display_body = (
-                f"🇷🇺 Исходный текст (Russian):\n{russian_text}\n\n"
-                f"🇬🇧 Перевод (English):\n{english_text}\n\n"
-                f"🔤 Произношение русскими буквами:\n\"{cyrillic_translit}\""
-            )
-
-            # 4. Show info screen window and read English text aloud
+            # 3. Show info screen window
             self.show_info_screen("Как сказать:", display_body, "")
-            self.speak_russian(english_text, lang='en')
 
         except Exception as e:
             print(f"Translation error: {e}")
