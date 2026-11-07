@@ -46,7 +46,7 @@ COMMAND_LIST_TEXT = (
     "• Алиса, напиши [Имя] [текст]\n"
     "• Алиса, напомни [текст] [дата] в [время]\n"
     "• Алиса, напомни [текст] через [X] минут/часов\n"
-    "• Алиса, обновись\n"
+    "• Алисаы, обновись\n"
     "• Алиса, погода / сегодня / завтра / неделя\n"
     "• Алиса, покажи / прочитай сообщения\n"
     "• Алиса, покажи последние сообщения\n"
@@ -55,7 +55,6 @@ COMMAND_LIST_TEXT = (
     "• Алиса, удали напоминание [номер]\n"
     "• Алиса, [ваш вопрос для ИИ]"
 )
-
 
 class AlisaApp:
     def __init__(self, root):
@@ -622,6 +621,62 @@ class AlisaApp:
         self.speak_russian(announcement)
         self.countdown_seconds = 300
         self.update_countdown_timer()
+
+def translate_and_display(self, russian_text):
+        if self.groq_api_key == "gsk_YOUR_GROQ_API_KEY_HERE":
+            self.speak_russian("Пожалуйста, настройте API ключ Groq.")
+            return
+
+        try:
+            # 1. Translate Russian to English using Groq
+            system_prompt = (
+                "You are a professional translator. Translate the given Russian sentence "
+                "into natural, everyday English. Output ONLY the English translation, nothing else."
+            )
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {self.groq_api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": "qwen/qwen3.8-27b", 
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": russian_text}
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 60
+                },
+                timeout=10
+            )
+            
+            english_text = ""
+            if response.status_code == 200:
+                english_text = response.json()["choices"][0]["message"]["content"].strip()
+            
+            if not english_text:
+                self.speak_russian("Не удалось перевести фразу.")
+                return
+
+            # 2. Transliterate English text into Russian letters (Cyrillic)
+            try:
+                from transliterate import translit
+                cyrillic_translit = translit(english_text, 'ru', reversed=True)
+            except Exception:
+                cyrillic_translit = "Транслитерация недоступна"
+
+            # 3. Format display text for the window
+            display_body = (
+                f"🇷🇺 Исходный текст:\n{russian_text}\n\n"
+                f"🇬🇧 Перевод (English):\n{english_text}\n\n"
+                f"🔤 Произношение (русскими буквами):\n{cyrillic_translit}"
+            )
+
+            # 4. Show info screen window and read English text aloud
+            self.show_info_screen("Перевод фразы", display_body, "")
+            self.speak_russian(english_text, lang='en')
+
+        except Exception as e:
+            print(f"Translation error: {e}")
+            self.speak_russian("Произошла ошибка при переводе.")
 
     def shutdown_computer(self):
         self.speak_russian("Выключаю компьютер.")
@@ -1422,6 +1477,13 @@ class AlisaApp:
                     # 5. General Commands & AI Fallback
                     elif any(w in query for w in ["список команд", "команды", "справка"]):
                         self.show_info_screen("Справочник команд", COMMAND_LIST_TEXT, "Показываю список доступных команд.")
+                    # --- NEW: Translation & Transliteration Command ---
+                    elif any(w in query for w in ["как сказать", "переведи", "перевести"]):
+                        phrase_to_translate = re.sub(r"^(?:как сказать|переведи|перевести)\s+", "", query, flags=re.IGNORECASE).strip()
+                        if phrase_to_translate:
+                            self.translate_and_display(phrase_to_translate)
+                        else:
+                            self.speak_russian("Какую фразу перевести?")
                     elif any(w in query for w in ["погода", "погоды", "прогноз"]):
                         if "завтра" in query:
                             self.show_info_screen("Прогноз на завтра", self.tomorrow_hourly_forecast, "Показываю прогноз на завтра.")
