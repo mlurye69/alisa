@@ -656,35 +656,36 @@ class AlisaApp:
                 self.speak_russian("Не удалось перевести фразу.")
                 return
 
-            # 2. Transliterate English text into Russian letters (Cyrillic phonetics)
-            cyrillic_translit = ""
-            try:
-                from transliterate import translit
-                # Try using standard translit for RU (reversed=False converts Latin to Cyrillic phonetic)
-                cyrillic_translit = translit(english_text, 'ru', reversed=False)
-            except Exception:
-                pass
+            # 2. Phonetic Russian Transliteration (English sounds spelled with Cyrillic letters)
+            import re
+            
+            def phonetic_translit(text):
+                t = text.lower()
+                # Clean punctuation for cleaner reading
+                t = re.sub(r'[^\w\s]', '', t)
+                
+                # Multi-letter English sounds to Russian phonetic equivalents
+                replacements = [
+                    ('tion', 'шн'), ('sion', 'шн'), ('igh', 'ай'), ('ough', 'оф'),
+                    ('wh', 'у'), ('sh', 'ш'), ('ch', 'ч'), ('zh', 'ж'), ('th', 'с'),
+                    ('ph', 'ф'), ('oo', 'у'), ('ee', 'и'), ('ea', 'и'), ('ai', 'эй'),
+                    ('ay', 'эй'), ('oa', 'оу'), ('ou', 'ау'), ('ow', 'ау'), ('ew', 'ью'),
+                    ('ck', 'к'), ('qu', 'кв'), ('wr', 'р'), ('kn', 'н'), ('gh', ''),
+                    ('a', 'э'), ('b', 'б'), ('c', 'к'), ('d', 'д'), ('e', 'э'),
+                    ('f', 'ф'), ('g', 'г'), ('h', 'х'), ('i', 'и'), ('j', 'дж'),
+                    ('k', 'к'), ('l', 'л'), ('m', 'м'), ('n', 'н'), ('o', 'о'),
+                    ('p', 'п'), ('q', 'к'), ('r', 'р'), ('s', 'с'), ('t', 'т'),
+                    ('u', 'а'), ('v', 'в'), ('w', 'у'), ('x', 'кс'), ('y', 'и'), ('z', 'з')
+                ]
+                
+                for src, dst in replacements:
+                    t = t.replace(src, dst)
+                    
+                # Clean up double letters and spacing
+                t = re.sub(r'(.)\1+', r'\1', t)
+                return t.capitalize()
 
-            # Fallback direct phonetic mapping if library output is empty or identical
-            if not cyrillic_translit or cyrillic_translit.lower() == english_text.lower():
-                # Simple phonetic substitution map for reading English with Russian letters
-                mapping = {
-                    'sh': 'ш', 'ch': 'ч', 'zh': 'ж', 'th': 'с', 'ph': 'ф', 'oo': 'у', 'ee': 'и',
-                    'a': 'э', 'b': 'б', 'c': 'к', 'd': 'д', 'e': 'э', 'f': 'ф', 'g': 'г',
-                    'h': 'х', 'i': 'и', 'j': 'дж', 'k': 'к', 'l': 'л', 'm': 'м', 'n': 'н',
-                    'o': 'о', 'p': 'п', 'q': 'к', 'r': 'р', 's': 'с', 't': 'т', 'u': 'а',
-                    'v': 'в', 'w': 'в', 'x': 'кс', 'y': 'и', 'z': 'з',
-                    'A': 'Э', 'B': 'Б', 'C': 'К', 'D': 'Д', 'E': 'Э', 'F': 'Ф', 'G': 'Г',
-                    'H': 'Х', 'I': 'И', 'J': 'Дж', 'K': 'К', 'L': 'Л', 'M': 'М', 'N': 'Н',
-                    'O': 'О', 'P': 'П', 'Q': 'К', 'R': 'Р', 'S': 'С', 'T': 'Т', 'U': 'А',
-                    'V': 'В', 'W': 'В', 'X': 'Кс', 'Y': 'И', 'Z': 'З'
-                }
-                # Sort keys by length descending to match multi-letter sounds first ('sh', 'ch', etc.)
-                sorted_keys = sorted(mapping.keys(), key=len, reverse=True)
-                temp_text = english_text
-                for key in sorted_keys:
-                    temp_text = temp_text.replace(key, mapping[key])
-                cyrillic_translit = temp_text
+            cyrillic_translit = phonetic_translit(english_text)
 
             # 3. Format display text so Cyrillic pronunciation is front and center
             display_body = (
