@@ -1478,7 +1478,7 @@ class AlisaApp:
                     # 5. General Commands & AI Fallback
                     elif any(w in query for w in ["список команд", "команды", "справка"]):
                         self.show_info_screen("Справочник команд", COMMAND_LIST_TEXT, "Показываю список доступных команд.")
-                    # --- NEW: Translation & Transliteration Command ---
+                    # --- Translation & Transliteration Command ---
                     elif any(w in query for w in ["как сказать", "переведи", "перевести"]):
                         phrase_to_translate = re.sub(r"^(?:как сказать|переведи|перевести)\s+", "", query, flags=re.IGNORECASE).strip()
                         if phrase_to_translate:
