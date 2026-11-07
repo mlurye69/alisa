@@ -663,15 +663,16 @@ class AlisaApp:
             except Exception:
                 cyrillic_translit = "Транслитерация недоступна"
 
-            # 3. Format display text for the window
+            # 3. Format display text so Cyrillic pronunciation is front and center
             display_body = (
-                f"🇷🇺 Исходный текст:\n{russian_text}\n\n"
-                f"🇬🇧 Перевод (English):\n{english_text}\n\n"
-                f"🔤 Произношение (русскими буквами):\n{cyrillic_translit}"
+                f"🔤 Произношение (русскими буквами):\n"
+                f"\"{cyrillic_translit}\"\n\n"
+                f"🇬🇧 English:\n{english_text}\n\n"
+                f"🇷🇺 Исходный текст:\n{russian_text}"
             )
 
             # 4. Show info screen window and read English text aloud
-            self.show_info_screen("Перевод фразы", display_body, "")
+            self.show_info_screen("Как сказать:", display_body, "")
             self.speak_russian(english_text, lang='en')
 
         except Exception as e:
