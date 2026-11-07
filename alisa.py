@@ -628,8 +628,9 @@ class AlisaApp:
             return
 
         try:
+            import re
+            
             # 1. Detect if input is Russian or English, and translate accordingly
-            # If input contains Cyrillic letters, translate to English. Otherwise, translate to Russian.
             is_russian = bool(re.search(r'[а-яА-ЯёЁ]', text_to_translate))
             
             if is_russian:
@@ -675,7 +676,6 @@ class AlisaApp:
                 russian_text = translated_text
 
             # 2. Phonetic Russian Transliteration for the English text
-            import re
             def phonetic_translit(text):
                 t = text.lower()
                 t = re.sub(r'[^\w\s]', '', t)
