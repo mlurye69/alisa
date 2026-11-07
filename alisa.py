@@ -622,7 +622,7 @@ class AlisaApp:
         self.countdown_seconds = 300
         self.update_countdown_timer()
 
-def translate_and_display(self, russian_text):
+    def translate_and_display(self, russian_text):
         if self.groq_api_key == "gsk_YOUR_GROQ_API_KEY_HERE":
             self.speak_russian("Пожалуйста, настройте API ключ Groq.")
             return
