@@ -622,17 +622,27 @@ class AlisaApp:
         self.countdown_seconds = 300
         self.update_countdown_timer()
 
-    def translate_and_display(self, russian_text):
+    def translate_and_display(self, text_to_translate):
         if self.groq_api_key == "gsk_YOUR_GROQ_API_KEY_HERE":
             self.speak_russian("Пожалуйста, настройте API ключ Groq.")
             return
 
         try:
-            # 1. Translate Russian to English using Groq
-            system_prompt = (
-                "You are a professional translator. Translate the given Russian sentence "
-                "into natural, everyday English. Output ONLY the English translation, nothing else."
-            )
+            # 1. Detect if input is Russian or English, and translate accordingly
+            # If input contains Cyrillic letters, translate to English. Otherwise, translate to Russian.
+            is_russian = bool(re.search(r'[а-яА-ЯёЁ]', text_to_translate))
+            
+            if is_russian:
+                system_prompt = (
+                    "You are a professional translator. Translate the given Russian sentence "
+                    "into natural, everyday English. Output ONLY the English translation, nothing else."
+                )
+            else:
+                system_prompt = (
+                    "You are a professional translator. Translate the given English sentence "
+                    "into natural, everyday Russian. Output ONLY the Russian translation, nothing else."
+                )
+
             response = requests.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {self.groq_api_key}", "Content-Type": "application/json"},
@@ -640,7 +650,7 @@ class AlisaApp:
                     "model": "qwen/qwen3.8-27b", 
                     "messages": [
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": russian_text}
+                        {"role": "user", "content": text_to_translate}
                     ],
                     "temperature": 0.3,
                     "max_tokens": 60
@@ -648,21 +658,27 @@ class AlisaApp:
                 timeout=10
             )
             
-            english_text = ""
+            translated_text = ""
             if response.status_code == 200:
-                english_text = response.json()["choices"][0]["message"]["content"].strip()
+                translated_text = response.json()["choices"][0]["message"]["content"].strip()
             
-            if not english_text:
+            if not translated_text:
                 self.speak_russian("Не удалось перевести фразу.")
                 return
 
-            # 2. Phonetic Russian Transliteration (English sounds spelled with Cyrillic letters)
+            # Determine source, English, and phonetic output based on direction
+            if is_russian:
+                russian_text = text_to_translate
+                english_text = translated_text
+            else:
+                english_text = text_to_translate
+                russian_text = translated_text
+
+            # 2. Phonetic Russian Transliteration for the English text
             import re
-            
             def phonetic_translit(text):
                 t = text.lower()
                 t = re.sub(r'[^\w\s]', '', t)
-                
                 replacements = [
                     ('tion', 'шн'), ('sion', 'шн'), ('igh', 'ай'), ('ough', 'оф'),
                     ('wh', 'у'), ('sh', 'ш'), ('ch', 'ч'), ('zh', 'ж'), ('th', 'с'),
@@ -675,16 +691,14 @@ class AlisaApp:
                     ('p', 'п'), ('q', 'к'), ('r', 'р'), ('s', 'с'), ('t', 'т'),
                     ('u', 'а'), ('v', 'в'), ('w', 'у'), ('x', 'кс'), ('y', 'и'), ('z', 'з')
                 ]
-                
                 for src, dst in replacements:
                     t = t.replace(src, dst)
-                    
                 t = re.sub(r'(.)\1+', r'\1', t)
                 return t.capitalize()
 
             cyrillic_translit = phonetic_translit(english_text)
 
-            # 3. Format display text with correct matching labels
+            # 3. Format display text with properly aligned labels for both directions
             display_body = (
                 f"🇷🇺 Исходный текст (Russian):\n{russian_text}\n\n"
                 f"🇬🇧 Перевод (English):\n{english_text}\n\n"
