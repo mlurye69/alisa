@@ -656,12 +656,35 @@ class AlisaApp:
                 self.speak_russian("Не удалось перевести фразу.")
                 return
 
-            # 2. Transliterate English text into Russian letters (Cyrillic)
+            # 2. Transliterate English text into Russian letters (Cyrillic phonetics)
+            cyrillic_translit = ""
             try:
                 from transliterate import translit
-                cyrillic_translit = translit(english_text, 'ru', reversed=True)
+                # Try using standard translit for RU (reversed=False converts Latin to Cyrillic phonetic)
+                cyrillic_translit = translit(english_text, 'ru', reversed=False)
             except Exception:
-                cyrillic_translit = "Транслитерация недоступна"
+                pass
+
+            # Fallback direct phonetic mapping if library output is empty or identical
+            if not cyrillic_translit or cyrillic_translit.lower() == english_text.lower():
+                # Simple phonetic substitution map for reading English with Russian letters
+                mapping = {
+                    'sh': 'ш', 'ch': 'ч', 'zh': 'ж', 'th': 'с', 'ph': 'ф', 'oo': 'у', 'ee': 'и',
+                    'a': 'э', 'b': 'б', 'c': 'к', 'd': 'д', 'e': 'э', 'f': 'ф', 'g': 'г',
+                    'h': 'х', 'i': 'и', 'j': 'дж', 'k': 'к', 'l': 'л', 'm': 'м', 'n': 'н',
+                    'o': 'о', 'p': 'п', 'q': 'к', 'r': 'р', 's': 'с', 't': 'т', 'u': 'а',
+                    'v': 'в', 'w': 'в', 'x': 'кс', 'y': 'и', 'z': 'з',
+                    'A': 'Э', 'B': 'Б', 'C': 'К', 'D': 'Д', 'E': 'Э', 'F': 'Ф', 'G': 'Г',
+                    'H': 'Х', 'I': 'И', 'J': 'Дж', 'K': 'К', 'L': 'Л', 'M': 'М', 'N': 'Н',
+                    'O': 'О', 'P': 'П', 'Q': 'К', 'R': 'Р', 'S': 'С', 'T': 'Т', 'U': 'А',
+                    'V': 'В', 'W': 'В', 'X': 'Кс', 'Y': 'И', 'Z': 'З'
+                }
+                # Sort keys by length descending to match multi-letter sounds first ('sh', 'ch', etc.)
+                sorted_keys = sorted(mapping.keys(), key=len, reverse=True)
+                temp_text = english_text
+                for key in sorted_keys:
+                    temp_text = temp_text.replace(key, mapping[key])
+                cyrillic_translit = temp_text
 
             # 3. Format display text so Cyrillic pronunciation is front and center
             display_body = (
