@@ -661,10 +661,8 @@ class AlisaApp:
             
             def phonetic_translit(text):
                 t = text.lower()
-                # Clean punctuation for cleaner reading
                 t = re.sub(r'[^\w\s]', '', t)
                 
-                # Multi-letter English sounds to Russian phonetic equivalents
                 replacements = [
                     ('tion', 'шн'), ('sion', 'шн'), ('igh', 'ай'), ('ough', 'оф'),
                     ('wh', 'у'), ('sh', 'ш'), ('ch', 'ч'), ('zh', 'ж'), ('th', 'с'),
@@ -681,18 +679,16 @@ class AlisaApp:
                 for src, dst in replacements:
                     t = t.replace(src, dst)
                     
-                # Clean up double letters and spacing
                 t = re.sub(r'(.)\1+', r'\1', t)
                 return t.capitalize()
 
             cyrillic_translit = phonetic_translit(english_text)
 
-            # 3. Format display text so Cyrillic pronunciation is front and center
+            # 3. Format display text with correct matching labels
             display_body = (
-                f"🔤 Произношение (русскими буквами):\n"
-                f"\"{cyrillic_translit}\"\n\n"
-                f"🇬🇧 English:\n{english_text}\n\n"
-                f"🇷🇺 Исходный текст:\n{russian_text}"
+                f"🇷🇺 Исходный текст (Russian):\n{russian_text}\n\n"
+                f"🇬🇧 Перевод (English):\n{english_text}\n\n"
+                f"🔤 Произношение русскими буквами:\n\"{cyrillic_translit}\""
             )
 
             # 4. Show info screen window and read English text aloud
